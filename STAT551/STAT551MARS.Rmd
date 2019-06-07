@@ -1,0 +1,463 @@
+---
+title: "STAT 551 MARS Assignment"
+author: "Yuchi Hu"
+date: "April 21, 2019"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message=F,warning=F,echo=F,fig.height=4,fig.width=6,cache=F,out.extra='',fig.pos='h')
+```
+
+```{r, eval=F}
+# Install packages used in this project
+if(!require(readxl)){install.packages("readxl")}
+if(!require(dplyr)){install.packages("dplyr")}
+if(!require(earth)){install.packages("earth")}
+if(!require(ggplot2)){install.packages("ggplot2")}
+if(!require(gridExtra)){install.packages("gridExtra")}
+if(!require(OneR)){install.packages("OneR")}
+if(!require(caret)){install.packages("caret")}
+if(!require(ROCit)){install.packages("ROCit")}
+if(!require(ggmosaic)){install.packages("ggmosaic")}
+if(!require(knitr)){install.packages("knitr")}
+```
+
+```{r}
+# Load packages used in this project
+library(readxl)
+library(dplyr)
+library(earth)
+library(ggplot2)
+library(gridExtra)
+library(OneR)
+library(caret)
+library(ROCit)
+library(ggmosaic)
+library(knitr)
+```
+
+# 1. Introduction
+The data for this assignment comes from RetentionDataRaw.xlsx, which we have already used extensively in the Midterm. The data is composed of credit card monthly billing statements from February 2010 to November 2010 (shorter time frames for closed accounts). The task now is to analyze the data using multivariate adaptive regression splines (MARS) and logistic regression with binned variables. The response is the *Bad* variable, which we create and define, and the predictors are *Good Customer Score*, *Behavior Score*, and *Quarterly Fico Score*. Before we can do any modeling, we need to create the "model dataset" from the retention data.
+
+# 2. Creating the Model Dataset
+The retention data originally has 97,465 rows and 26 columns. After removing the rows with missing ID's, we are left with 91,502 rows representing 9,997 unique ID's. To create the model dataset, we need to remove customers that we deem to be too risky. We also need to define "good" and "bad" customers.  
+
+```{r}
+# Load the data
+path <- 'C:/Users/George/Desktop/PredictiveAnalyticsI/Midterm/RetentionDataRaw.xlsx'
+x <- read_excel(path, sheet='Cycle Data')
+```
+
+```{r}
+# Convert DebtDimID to factor
+x$DebtDimID <- as.factor(x$DebtDimId)
+# Drop the original DebtDimID column
+x[1] <- NULL
+# Drop NA rows
+x <- x[!is.na(x$DebtDimID), ]
+# Number of unique ID's in this data = 9,997
+#cat("Number of unique ID's:", length(unique(x$DebtDimID)))
+```
+
+```{r}
+# Change blank External Status to O (open)
+x[is.na(x$`External Status`), ]$`External Status` <- 'O'
+# Convert External Status and ClosureReason to factors
+x$`External Status` <- as.factor(x$`External Status`)
+x$ClosureReason <- as.factor(x$ClosureReason)
+```
+
+## 2.1 Remove Risky Customers
+We found out from the Midterm that some customers are too risky to give more money to, so we will simply remove them from the data. The customer is deemed too risky if their *Row Num* = 1 (month 1) satisfies any of the following conditions:  
+
+- *Days Deliq* > 0 (more than 0 days delinquent)
+- non-blank *External Status* (a blank *External Status* corresponds to an open account)
+- *Opening Balance* > *Credit Limit*
+- *Ending Balance* > *Credit Limit*
+
+We find that 4,167 of the 9,997 unique ID's are too risky, so we are left with 5,830 unique ID's after removing the risky customers. Overall, we are left with 55,895 rows of data.
+
+```{r}
+# Remove risky customers (Days Deliq > 0 or non-blank External Status...
+# ...or Opening/Ending Balance > Credit Limit in Row Num = 1)
+removed.customers <- subset(x[x$`Row Num` == 1,], `Days Deliq` > 0 | `External Status` != 'O' | `Opening Balance` > `Credit Limit` |
+               `Ending Balance` > `Credit Limit`)
+
+# Remove duplicate rows
+removed.customers <- removed.customers[!duplicated(removed.customers$DebtDimID), ]
+
+# Number of unique ID's of risky customers = 4167
+#cat("Number of unique ID's of risky customers:", length(unique(removed.customers$DebtDimID)))
+```
+
+```{r}
+# Data after removing risky customers
+x <- x[!x$DebtDimID %in% removed.customers$DebtDimID, ]
+
+# Number of unique ID's after removing risky customers = 5830
+#cat("Number of unique ID's after removing risky customers:", length(unique(x$DebtDimID)))
+```
+
+## 2.2 Define Good and Bad Customers
+Next, for the remaining customers, we create the *Bad* variable (the response) to define whether they are good (*Bad*=0) or bad (*Bad*=1) customers. A customer is defined as bad if they satisfy any of the following conditions:
+
+- *Days Deliq* $\ge$ 90 (90 or more days delinquent) in the final month
+- *External Status* other than blank (open account) or "C" (closed account) in month 7 or later
+
+We find that 610 unique ID's satisfy the first criterion and 669 unique ID's satisfy the second criterion. Customers who do not satisfy any of the two criteria are defined as good.
+
+```{r}
+# Extract final month of each customer
+tmp <- x %>%
+  group_by(DebtDimID) %>%
+  arrange(`Row Num`) %>%
+  filter(row_number()==n())
+
+# 90 or more days delinquent in final month
+tmp <- tmp[tmp$`Days Deliq` >= 90, ]
+
+# Number of unique ID's of customers who are 90 or more days delinquent in final month = 610
+#cat("Number of unique ID's of customers who are 90 or more days delinquent in final month:", length(unique(tmp$DebtDimID)))
+
+# Bad = 1 if 90 or more days delinquent in final month 
+x$Bad <- as.factor(ifelse(x$DebtDimID %in% tmp$DebtDimID, 1, 0))
+```
+
+```{r}
+# External Status other than blank or 'C' in month 7 or later
+tmp <- subset(x[x$`Row Num` >= 7, ], `External Status` != 'O' & `External Status` != 'C')
+
+# Number of unique ID's of customers with External Status other than blank or 'C' in month 7 or later = 669
+#cat("Number of unique ID's of customers with External Status other than blank or 'C' in month 7 or later:", length(unique(tmp$DebtDimID)))
+
+# Bad = 1 if External Status is not blank or 'C' in month 7 or later
+x[x$DebtDimID %in% tmp$DebtDimID, ]$Bad <- 1
+```
+
+## 2.3 Final Step
+After removing the risky customers and defining *Bad* for the remaining customers, the final step in the creation of the model dataset is to keep only *Row Num* = 1 (month 1) for each unique ID.    
+
+```{r}
+# Model dataset (Row Num = 1 observations)
+model.data <- x[x$`Row Num` == 1, ]
+```
+
+# 3. Exploratory Data Analysis on the Model Dataset
+Now that we have created the model dataset, we can perform exploratory data analysis on it. The model dataset is composed of 5,826 rows (number of unique ID's) and 27 variables (26 original variables + *Bad*). The response is *Bad*, and the predictors are *Good Customer Score*, *Behavior Score*, and *Quarterly Fico Score*. For the MARS model, the predictors will be used as is, while for logistic regression, the predictors will be binned. 
+
+First, let's see how many good and bad customers are in the model dataset.
+
+```{r}
+# Count of good and bad customers in the model dataset
+summary(model.data$Bad)
+```
+
+We see that there are 5,073 good customers and 753 bad customers.
+
+```{r, fig.height=7, fig.width=11}
+#### Histograms of scores 
+theme_update(plot.title=element_text(hjust=0.5))
+# Good Customer Score
+p1 <- ggplot(data=model.data, aes(x=as.numeric(`Good Customer Score`), fill=Bad)) + 
+  geom_histogram(alpha=0.7, position='identity') + scale_fill_manual(values=c("#E69F00", "#56B4E9")) +
+  labs(title='Good Customer Score', y='Count', x='Good Customer Score')
+# Behavior Score
+p2 <- ggplot(data=model.data, aes(x=as.numeric(`Behavior Score`), fill=Bad)) + 
+  geom_histogram(alpha=0.7, position='identity') +scale_fill_manual(values=c("#E69F00", "#56B4E9")) +
+  labs(title='Behavior Score', y='Count', x='Behavior Score')
+# Quarterly FICO Score
+p3 <- ggplot(data=model.data, aes(x=as.numeric(`Quarterly Fico Score`), fill=Bad)) + 
+  geom_histogram(alpha=0.7, position='identity') + scale_fill_manual(values=c("#E69F00", "#56B4E9")) +
+  labs(title='Quarterly FICO Score', y='Count', x='Quarterly FICO Score')
+
+grid.arrange(p1, p2, p3, ncol=2)
+```
+\begin{center}
+Figure 1: Histograms of the three scores grouped by Bad (Good=0, Bad=1).
+\end{center}
+
+**Figure 1** shows the histograms of the three scores grouped by *Bad*. We see that good and bad customers have similar score distributions. We also see some 0's for *Good Customer Score* and *Quarterly FICO Score*; in the case of *Quarterly FICO Score*, the number of 0's is significant. We should also note that there are NA's for *Good Customer Score* as well.   
+
+```{r, fig.height=7, fig.width=7}
+#### Boxplots of scores by Bad
+# Good Customer Score
+p1 <- ggplot(data=model.data, aes(x=Bad, y=as.numeric(`Good Customer Score`), fill=Bad)) + geom_boxplot() + 
+  labs(title='Good Customer Score', x='Bad', y='Good Customer Score') + scale_fill_manual(values=c("#E69F00", "#56B4E9")) 
+# Behavior Score
+p2 <- ggplot(data=model.data, aes(x=Bad, y=as.numeric(`Behavior Score`), fill=Bad)) + geom_boxplot() + 
+  labs(title='Behavior Score', x='Bad', y='Behavior FICO Score') + scale_fill_manual(values=c("#E69F00", "#56B4E9")) 
+# Quarterly FICO Score
+p3 <- ggplot(data=model.data, aes(x=Bad, y=as.numeric(`Quarterly Fico Score`), fill=Bad)) + geom_boxplot() + 
+  labs(title='Quarterly FICO Score', x='Bad', y='Quarterly FICO Score') + scale_fill_manual(values=c("#E69F00", "#56B4E9"))
+
+grid.arrange(p1, p2, p3, ncol=2)
+```
+\begin{center}
+Figure 2: Boxplots of the three scores grouped by Bad (Good=0, Bad=1).
+\end{center}
+
+**Figure 2** shows the boxplots of the three scores grouped by *Bad*. We see that good customers tend to have higher scores than bad customers. 
+
+As previously mentioned, *Good Customer Score* has 0's and NA's, and *Quarterly FICO Score* has 0's. In order to properly deal with these odd values, we should bin the scores; that is, convert the scores into categorical variables.
+
+To bin the scores, we use **bin()** from the **OneR** package. We specify "cluster" (1D K-means clustering or Jenks natural breaks optimization) as the method of binning. This method reduces within-class variance and maximizes between-class variance. All of the 0's and NA's are put into their own bins, while the rest of the values are binned according to **bin()**.   
+
+```{r}
+#### Find cut points 
+# Good Customer Score 
+# Remove 0's (make a separate bin for 0's)
+gcs.nozeros <- as.numeric(model.data$`Good Customer Score`)
+gcs.nozeros <- gcs.nozeros[! gcs.nozeros %in% 0]
+# Bins without 0's
+binned.good <- bin(gcs.nozeros, nbins=8, method='cluster', na.omit=FALSE)
+#summary(binned.good)
+
+# Behavior Score
+binned.behavior <- bin(model.data$`Behavior Score`, nbins=10, method='cluster', na.omit=FALSE)
+#summary(binned.behavior)
+
+# Quarterly Fico Score
+# Remove 0's (make a separate bin for 0's)
+qfs.nozeros <- model.data$`Quarterly Fico Score`
+qfs.nozeros <- qfs.nozeros[! qfs.nozeros %in% 0]
+binned.fico <- bin(qfs.nozeros, nbins=9, method='cluster', na.omit=FALSE)
+#summary(binned.fico)
+```
+
+```{r}
+#### Convert scores to bins
+# Good Customer Score 
+model.data$binned.good <- cut(as.numeric(model.data$`Good Customer Score`), 
+                              breaks=c(-Inf, 318, 427, 556, 670, 730, 784, 855, 935, 1000))
+levels(model.data$binned.good)[1] <- 0  # Change name of bin from (-Inf,318]
+levels(model.data$binned.good)[9] <- '(935,1000]'  # Change name of bin from (935,1e+03]
+model.data$binned.good <- addNA(model.data$binned.good)  # Add bin for NA
+
+# Behavior Score
+model.data$binned.behavior <- cut(model.data$`Behavior Score`, breaks=c(586, 609, 623, 635, 646, 656, 667, 678, 689, 700, 721))
+
+# Quarterly Fico Score
+model.data$binned.fico <- cut(model.data$`Quarterly Fico Score`, breaks=c(-Inf, 386, 472, 510, 546, 580, 612, 641, 671, 711, 805))
+levels(model.data$binned.fico)[1] <- 0  # Change name of bin from (-Inf,386]
+```
+
+```{r, fig.height=7, fig.width=11}
+#### Bar charts of binned scores
+# Good Customer Score
+p1 <- ggplot(data=model.data, aes(x=binned.good)) + geom_bar() + geom_text(stat='count', aes(label=..count..), vjust=-0.05) +
+  labs(title='Good Customer Score (Binned)', y='Count', x='Binned Score') + theme(axis.text.x=element_text(angle=45, hjust=1))
+# Behavior Score
+p2 <- ggplot(data=model.data, aes(x=binned.behavior)) + geom_bar() + geom_text(stat='count', aes(label=..count..), vjust=-0.05) +
+  labs(title='Behavior Score (Binned)', y='Count', x='Binned Score') + theme(axis.text.x=element_text(angle=45, hjust=1))
+# Quarterly Fico Score
+p3 <- ggplot(data=model.data, aes(x=binned.fico)) + geom_bar() + geom_text(stat='count', aes(label=..count..), vjust=-0.05) +
+  labs(title='Quarterly FICO Score (Binned)', y='Count', x='Binned Score') + theme(axis.text.x=element_text(angle=45, hjust=1))
+
+grid.arrange(p1, p2, p3, ncol=2)
+```
+\begin{center}
+Figure 3: Bar charts of the binned scores.
+\end{center}
+
+```{r, fig.height=6, fig.width=10}
+#### Mosaic plots of Bad vs. binned scores
+# Bad vs. Good Customer Score
+p1 <- ggplot(data=model.data) + geom_mosaic(aes(x=product(Bad, binned.good), fill=Bad)) + 
+  labs(title='Bad vs. Good Customer Score (Binned)', y='Bad', x='Binned Score') +
+  scale_fill_discrete(name='admission') + scale_fill_manual(values=c("#E69F00", "#56B4E9")) +
+  theme(axis.text.x=element_text(angle=45, hjust=1))
+# Bad vs. Behavior Score
+p2 <- ggplot(data=model.data) + geom_mosaic(aes(x=product(Bad, binned.behavior), fill=Bad)) + 
+  labs(title='Bad vs. Behavior Score (Binned)', y='Bad', x='Binned Score') +
+  scale_fill_discrete(name='admission') + scale_fill_manual(values=c("#E69F00", "#56B4E9")) +
+  theme(axis.text.x=element_text(angle=45, hjust=1))
+# Bad vs. Quarterly Fico Score
+p3 <- ggplot(data=model.data) + geom_mosaic(aes(x=product(Bad, binned.fico), fill=Bad)) + 
+  labs(title='Bad vs. Quarterly FICO Score (Binned)', y='Bad', x='Binned Score') +
+  scale_fill_discrete(name='admission') + scale_fill_manual(values=c("#E69F00", "#56B4E9")) +
+  theme(axis.text.x=element_text(angle=45, hjust=1))
+
+grid.arrange(p1, p2, p3, ncol=2)
+```
+\begin{center}
+Figure 4: Mosaic plots of Bad vs. binned scores.
+\end{center}
+
+**Figure 3** shows the bar charts of the three scores after binning. All three bar charts appear approximately normal. **Figure 4** shows the mosaic plots of *Bad* vs. the binned scores. We see that the relative proportion of bad customers (light blue) mostly decreases as scores increase. 
+
+# 4. The Models
+Before building the models, we use **createDataPartition()** from the **caret** package to split the model dataset into training (70%; 4,080 observations) and validation sets (30%; 1,746 observations). This function partitions the data while maintaining the class ratios (stratified sampling). 
+
+```{r}
+set.seed(1)
+# Split the model dataset 70:30 into training and validation sets (stratified sampling)
+sample <- createDataPartition(model.data$Bad, p=0.7, list=F)
+train <- model.data[sample,]
+test <- model.data[-sample,]
+```
+
+## 4.1 MARS
+We build a MARS model with *Bad* as the response and the three scores (unbinned) as the predictors.
+
+```{r}
+#### MARS
+# Remove rows with missing Good Customer Score
+a <- as.numeric(train$`Good Customer Score`)
+train.mars <- train[complete.cases(a), ] 
+b <- as.numeric(test$`Good Customer Score`)
+test.mars <- test[complete.cases(b), ]
+
+train.mars$`Good Customer Score` <- as.numeric(train.mars$`Good Customer Score`)
+test.mars$`Good Customer Score` <- as.numeric(test.mars$`Good Customer Score`)
+
+# MARS
+model.mars <- earth(Bad ~ `Good Customer Score` + `Behavior Score` + `Quarterly Fico Score`, data=train.mars)
+#summary(model.mars)
+
+# Predicted probabilities of Bad 
+probs.mars <- predict(model.mars, newdata=test.mars, type='response')
+```
+
+```{r, fig.height=4, fig.width=9}
+#### ROC and KS (MARS)
+# ROC
+roc.mars.train <- rocit(score=as.vector(model.mars$fitted.values), class=train.mars$Bad, negref=0)  # Training
+roc.mars.test <- rocit(score=as.vector(probs.mars), class=test.mars$Bad, negref=0)  # Validation
+
+# AUC
+auc.mars.train <- ciAUC(roc.mars.train)  # Training
+auc1 <- round(roc.mars.train$AUC, 4)
+auc.mars.test <- ciAUC(roc.mars.test)  # Validation
+auc2 <- round(roc.mars.test$AUC, 4)
+
+par(mfrow=c(1,2))
+# KS plots
+ksplot.mars.train <- ksplot(roc.mars.train)  # Training
+ksplot.mars.test <- ksplot(roc.mars.test)  # Validation
+
+# KS statistics
+ks1 <- round(ksplot.mars.train$`KS stat`, 4)  # Training
+ks2 <- round(ksplot.mars.test$`KS stat`, 4)  # Validation
+```
+\begin{center}
+Figure 5: KS plots of training (left) and validation sets (right) for MARS.
+\end{center}
+
+**Figure 5** shows the KS plots of the training and validation sets for MARS.
+
+```{r}
+#### ROC and KS (MARS)
+# ROC curves
+plot(roc.mars.train, col=c(1,'gray50'), legend=FALSE, YIndex=FALSE)
+lines(roc.mars.test$TPR~roc.mars.test$FPR, col='#D55E00', lwd=2)
+legend('bottomright', col=c(1,'#D55E00'), c(paste0('Training: AUC = ', auc1, ', KS = ', ks1), 
+                                            paste0('Validation: AUC = ', auc2, ', KS = ', ks2)), lwd=2)
+title(main='ROC Curves')
+```
+\begin{center}
+Figure 6: ROC curves of training and validation sets for MARS.
+\end{center}
+
+**Figure 6** shows the ROC curves of the training and validation sets for MARS. The training and validation AUC's are 0.7501 and 0.7514, respectively. The training and validation KS statistics are 0.3816 and 0.3744, respectively.
+
+```{r, fig.height=5, fig.width=10}
+#### Gains table (logistic)
+# Gains table
+gtable.mars.training <- gainstable(score=as.vector(model.mars$fitted.values),  
+                                   class=train.mars$Bad, negref=0, ngroup=10)  # Training  
+#kable(as.data.frame(gtable.mars.training[1:11]), digits=2, caption='Gains Table (Training)')
+gtable.mars.test <- gainstable(score=as.vector(probs.mars),  
+                               class=test.mars$Bad, negref=0, ngroup=10)  # Validation   
+kable(as.data.frame(gtable.mars.test[1:11]), digits=2, caption='Gains Table (Validation)')
+
+par(mfrow=c(1,2))
+# Lift
+plot(gtable.mars.training)  # Training
+title('Lift (Training)')
+plot(gtable.mars.test)  # Validation
+title('Lift (Validation)')
+```
+\begin{center}
+Figure 7: Lift and cumulative lift of training (left) and validation sets (right) for MARS.
+\end{center}
+
+**Table 1** shows the gains table of the validation set, and **Figure 7** shows the lift and cumulative lift of the training and validation sets for MARS.
+
+## 4.2 Logistic Regression
+We build a logistic regression model with *Bad* as the response and the three scores (binned) as the predictors.
+
+```{r}
+#### Logistic regression
+model.logistic <- glm(Bad ~ binned.good + binned.behavior + binned.fico, data=train, family=binomial)
+#summary(model.logistic)
+
+# Predicted probabilities of Bad 
+probs.logistic <- predict(model.logistic, newdata=test, type='response')
+```
+
+```{r, fig.height=4, fig.width=9}
+#### ROC and KS (logistic)
+# ROC
+roc.logistic.train <- rocit(score=model.logistic$fitted.values, class=train$Bad, negref=0)  # Training
+roc.logistic.test <- rocit(score=probs.logistic, class=test$Bad, negref=0)  # Validation
+
+# AUC
+auc.logistic.train <- ciAUC(roc.logistic.train)  # Training
+auc1 <- round(roc.logistic.train$AUC, 4)
+auc.logistic.test <- ciAUC(roc.logistic.test)  # Validation
+auc2 <- round(roc.logistic.test$AUC, 4)
+
+par(mfrow=c(1,2))
+# KS plots
+ksplot.logistic.train <- ksplot(roc.logistic.train)  # Training
+ksplot.logistic.test <- ksplot(roc.logistic.test)  # Validation
+
+# KS statistics
+ks1 <- round(ksplot.logistic.train$`KS stat`, 4)  # Training
+ks2 <- round(ksplot.logistic.test$`KS stat`, 4)  # Validation
+```
+\begin{center}
+Figure 8: KS plots of training (left) and validation sets (right) for logistic regression.
+\end{center}
+
+**Figure 8** shows the KS plots of the training and validation sets for logistic regression.
+
+```{r}
+#### ROC and KS (logistic)
+# ROC curves
+plot(roc.logistic.train, col=c(1,'gray50'), legend=FALSE, YIndex=FALSE)
+lines(roc.logistic.test$TPR~roc.logistic.test$FPR, col='#D55E00', lwd=2)
+legend('bottomright', col=c(1,'#D55E00'), c(paste0('Training: AUC = ', auc1, ', KS = ', ks1), 
+                                            paste0('Validation: AUC = ', auc2, ', KS = ', ks2)), lwd=2)
+title(main='ROC Curves')
+```
+\begin{center}
+Figure 9: ROC curves of training and validation sets for logistic regression.
+\end{center}
+
+**Figure 9** shows the ROC curves of the training and validation sets for logistic regression. The training and validation AUC's are 0.7574 and 0.7502, respectively. The training and validation KS statistics are 0.3742 and 0.4102, respectively.
+
+```{r, fig.height=5, fig.width=10}
+#### Gains table (logistic)
+# Gains table
+gtable.logistic.training <- gainstable(score=model.logistic$fitted.values, class=train$Bad, negref=0, ngroup=10)  # Training
+#kable(as.data.frame(gtable.logistic.training[1:11]), digits=2, caption='Gains Table (Training)')
+gtable.logistic.test <- gainstable(score=probs.logistic, class=test$Bad, negref=0, ngroup=10)  # Validation
+kable(as.data.frame(gtable.logistic.test[1:11]), digits=2, caption='Gains Table (Validation)')
+
+par(mfrow=c(1,2))
+# Lift
+plot(gtable.logistic.training)  # Training
+title('Lift (Training)')
+plot(gtable.logistic.test)  # Validation
+title('Lift (Validation)')
+```
+\begin{center}
+Figure 10: Lift and cumulative lift of training (left) and validation sets (right) for logistic regression.
+\end{center}
+
+**Table 2** shows the gains table of the validation set, and **Figure 10** shows the lift and cumulative lift of the training and validation sets for logistic regression.
+
+# 5. Conclusion
+The MARS and logistic regression models performed about equally well. The validation AUC's for MARS and logistic regression are 0.7514 and 0.7502, respectively. The KS statistics for MARS and logistic regression are 0.3744 and 0.4102, respectively. There are advantages and disadvantages to both models. For MARS, we used the original scores as predictors. These scores are continuous, and *Good Customer Score* contains NA's, which cannot be handled by MARS. Thus, we had to remove the NA's, potentially costing us valuable information. Despite that, MARS can provide great predictive power by capturing non-linear relationships through piecewise linear models. For logistic regression, we binned the scores, converting them into categorical variables. In this way, we can include 0's, NA's, or any other odd values we encounter as distinct categories. On the other hand, binning can result in too many bins and loss of information.

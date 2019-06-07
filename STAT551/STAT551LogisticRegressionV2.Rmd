@@ -1,0 +1,169 @@
+---
+title: "STAT 551 Logistic Regression Assignment"
+author: "Yuchi Hu"
+date: "February 10, 2019"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message=F,warning=F,echo=F,fig.height=4,fig.width=6,cache=F,        
+                      out.extra='',fig.pos= 'h')
+```
+
+```{r, eval=F}
+# Install packages used in this homework
+install.packages(ggplot2)
+install.packages(gridExtra)
+install.packages(knitr)
+install.packages(ggmosaic)
+```
+
+```{r}
+# Load packages used in this homework
+library(ggplot2)
+library(gridExtra)
+library(knitr)
+library(ggmosaic)
+```
+
+# Problem 1
+It is not useful to model this probability directly as a linear combination of the predictors because some estimated probabilities end up either negative or greater than 1. To handle this problem, we should model this probability using a function that gives outputs between 0 and 1 for all values of the predictor(s). In logistic regression, we use the logistic function, which satisfies this criteria.
+
+# Problem 2
+
+```{r}
+# Load LogRegData.csv
+MyData <- read.csv('C:/Users/George/Desktop/PredictiveAnalyticsI/LogRegData.csv', header=T)
+
+# Categorize GPA
+MyData$GPAcategorized <- factor(ifelse(MyData$GPA<3, 'Low', ifelse(MyData$GPA<3.5, 'Medium', 'High')))
+```
+
+## Part 2.1
+First, we look at the numerical summary of the data.
+
+```{r}
+# MyData summary
+kable(summary(MyData), caption='Numerical Summary of MyData')
+```
+
+We can see from **Table 1** that the median of *admission* is 0 (did not get admitted to grad school), the median of *GRE* is 590, the median of *GPA* is 3.385, and the median of *Rank* (prestige status of undergrad school) is 2. In terms of *GPAcategorized*, there are many more students with "Medium" or "High" GPA than those with "Low" GPA. 
+
+\newpage
+
+Next, we look at some histograms and bar charts of the variables.
+
+```{r, fig.height=7, fig.width=11, fig.cap='\\label{part2.1.1}Histograms and bar charts'}
+theme_update(plot.title=element_text(hjust=0.5))
+# Histogram of GRE
+p1 <- ggplot(data=MyData, aes(x=GRE)) + geom_histogram(origin=300, binwidth=50) + 
+  labs(title='Histogram of GRE')
+# Histogram of GPA
+p2 <- ggplot(data=MyData, aes(x=GPA, fill=GPAcategorized)) + geom_histogram(origin=2, binwidth=0.25) + 
+  labs(title='Histogram of GPA')
+# Bar Chart of Rank
+p3 <- ggplot(data=MyData, aes(x=Rank, fill=as.factor(Rank))) + geom_bar() + 
+  labs(title='Bar Chart of Rank') + theme(legend.position='none')
+# Bar Chart of admission
+p4 <- ggplot(data=MyData, aes(x=as.factor(admission), fill=as.factor(admission))) + geom_bar() + 
+  labs(title='Bar Chart of admission', x='admission') + theme(legend.position='none')
+
+# Combine the plots into one graph
+grid.arrange(p1, p2, p3, p4, ncol=2)
+```
+
+From the top left plot of **Figure \ref{part2.1.1}**, we can see that *GRE* is approximately normally distributed with most values falling between 450 and 700. The top right plot shows the histogram of *GPA* colored by *GPAcategorized*. We can see that the distribution of *GPA* is left-skewed with more values falling above 3.0 than below it. The bottom left plot shows that the values of *Rank* are mostly 2 and 3. The bottom right plot shows that the values of *admission* are predominantly 0 (did not get admitted to grad school). 
+
+\newpage
+
+To get an idea of the relationship between each predictor and *admission*, we construct some boxplots and mosaic plots. 
+
+```{r, fig.height=7, fig.width=11, fig.cap='\\label{part2.1.2}Boxplots and mosaic plots'}
+# Boxplot of GRE vs. admission
+p1 <- ggplot(data=MyData, aes(y=GRE, x=factor(admission))) + geom_boxplot() + 
+  labs(title='Boxplot of GRE vs. admission', x='admission')
+# Boxplot of GPA vs. admission
+p2 <- ggplot(data=MyData, aes(y=GPA, x=factor(admission))) + geom_boxplot() + 
+  labs(title='Boxplot of GPA vs. admission', x='admission')
+# Mosaic plot of admission vs. Rank
+p3 <- ggplot(data=MyData) + 
+  geom_mosaic(aes(x=product(factor(admission), Rank), fill=factor(admission))) + 
+  labs(title='Mosaic Plot of admission vs. Rank', y='admission', x='Rank') + 
+  scale_fill_discrete(name='admission')
+# Mosaic plot of admission vs. GPAcategorized
+p4 <- ggplot(data=MyData) + 
+  geom_mosaic(aes(x=product(factor(admission), GPAcategorized), fill=factor(admission))) + 
+  labs(title='Mosaic Plot of admission vs. GPAcategorized', y='admission', x='GPAcategorized') +
+  scale_fill_discrete(name='admission')
+
+grid.arrange(p1, p2, p3, p4, ncol=2)
+```
+
+From the top left and top right plots of **Figure \ref{part2.1.2}**, we can see that both higher values of *GRE* and *GPA* tend to correspond to *admission* = 1 (admitted to grad school). The lower left plot shows that as the value of *Rank* increases (prestige status of the undergrad school decreases), the relative proportion of students who did not get admitted increases. In other words, students from more prestigious undergrad schools are more likely to be admitted to grad school. The lower right plot shows that students are more likely to be admitted with a "High" GPA than with a "Low" or "Medium" GPA although the admission rate for students with "Low" and "Medium" GPA's are about equal.
+
+Based on these plots, we should include all of the variables in a predictive model. \*\*Naturally, we should only use one of *GPA* and *GPAcategorized*.**  
+
+\newpage
+
+# Problem 3
+
+## Part 3.1
+We fit a logistic regression model (logisticModel1) with *admission* as the response and *GRE* and *GPAcategorized* as the predictors. The summary of logisticModel1 is below:
+
+```{r}
+# Logistic regression model
+logisticModel1 <- glm(admission ~ GRE + GPAcategorized, data=MyData, family=binomial)
+
+# Model summary
+summary(logisticModel1)
+```
+
+From the summary, we can see that the parameters for *GRE* and *GPAcategorizedMedium* are significant at $\alpha$ = 0.05. The parameter for *GPAcategorizedLow* is not significant at $\alpha$ = 0.05. The AIC of LogisticModel1 is 417.88.
+
+Two parameters were estimated for the *GPAcategorized* variable in LogisticModel1. The parameter for *GPAcategorizedLow* is -0.447, so the odds of *admission* for a student with "Low" GPA is about exp(-0.447) = 63.9% of the odds of *admission* for a student with "High" GPA. The parameter for *GPAcategorizedMedium* is -0.636, so the odds of *admission* for a student with "Medium" GPA is about exp(-0.636) = 53% of the odds of *admission* for a student with "High" GPA.
+
+The "High" level of *GPAcategorized* is taken as reference.
+
+The parameter for *GRE* is 0.0032, and exp(0.0032) = 100.32%. So, it estimates an increase of 0.32% in the odds of *admission* for each unit increase in *GRE*.
+
+\newpage
+
+## Part 3.2
+We change the reference level of *GPAcategorized* to "Low". Then, we fit the same logistic regression model (logisticModel2). The summary of logisticModel2 is below:
+
+```{r}
+# Change reference level of GPAcategorized to Low
+MyData$GPAcategorized <- relevel(MyData$GPAcategorized, ref='Low')
+
+# Logistic regression model (Low as reference)
+logisticModel2 <- glm(admission ~ GRE + GPAcategorized, data=MyData, family=binomial)
+
+# Model summary
+summary(logisticModel2)
+```
+
+We can see that the estimates of the parameters (excluding *GRE*) changed. This is because the reference level of *GPAcategorized* is now "Low" instead of "High". 
+
+The parameter for *GPAcategorizedHigh* is 0.447, so the odds of *admission* for a student with "High" GPA is about exp(0.447) = 156.4% of the odds of *admission* for a student with "Low" GPA. The parameter for *GPAcategorizedMedium* is -0.188, so the odds of *admission* for a student with "Medium" GPA is about exp(-0.188) = 82.8% of the odds of *admission* for a student with "Low" GPA.
+
+\newpage
+
+## Part 3.3
+From logisticModel1, for a student with a GRE of 650 and "High" GPA, the probability of being ADMITTED is
+
+$$\hat{p}(admission=1) = \frac{exp(-2.409566 + 0.003185*GRE)}{1+exp(-2.409566 + 0.003185*GRE)} = \frac{exp(-2.409566 + 0.003185*650)}{1+exp(-2.409566 + 0.003185*650)} = 0.416$$
+
+Thus, the probability of being rejected is 1 - 0.416 = **0.584**.
+
+From logisticModel2, for a student with a GRE of 650 and "High" GPA, the probability of being ADMITTED is
+
+$$\hat{p}(admission=1) = \frac{exp(-2.856988 + 0.447423 + 0.003185*GRE)}{1+exp(-2.856988 + 0.447423 + 0.003185*GRE)} = \frac{exp(-2.409565 + 0.003185*650)}{1+exp(-2.409565 + 0.003185*650)} = 0.416$$
+
+Thus, the probability of being rejected is 1 - 0.416 = **0.584**. 
+
+We get the same results using predict().
+
+```{r, echo=T}
+1 - predict(logisticModel1, newdata=data.frame(GRE=650, GPAcategorized='High'), type='response')
+1 - predict(logisticModel2, newdata=data.frame(GRE=650, GPAcategorized='High'), type='response')
+```
