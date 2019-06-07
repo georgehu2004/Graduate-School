@@ -1,0 +1,776 @@
+---
+title: "Off-line Character Recognition"
+subtitle: "STAT 602 Final Project"
+author: "Yuchi Hu"
+date: "May 2, 2019"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message=F,warning=F,echo=F,fig.height=4,fig.width=6,cache=F,out.extra='',fig.pos='h')
+```
+
+```{r, eval=F}
+# Install packages used in this project
+if(!require(knitr)){install.packages("knitr")}
+if(!require(ggplot2)){install.packages("ggplot2")}
+if(!require(caret)){install.packages("caret")}
+if(!require(gridExtra)){install.packages("gridExtra")}
+if(!require(rpart)){install.packages("rpart")}
+if(!require(rpart.plot)){install.packages("rpart.plot")}
+if(!require(randomForest)){install.packages("randomForest")}
+if(!require(MASS)){install.packages("MASS")}
+if(!require(class)){install.packages("class")}
+if(!require(e1071)){install.packages("e1071")}
+if(!require(klaR)){install.packages("klaR")}
+if(!require(DMwR)){install.packages("DMwR")}
+if(!require(UBL)){install.packages("UBL")}
+```
+
+```{r}
+# Load packages used in this project
+library(knitr)
+library(ggplot2)
+library(caret)
+library(gridExtra)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(MASS)
+library(class)
+library(e1071)
+library(klaR)
+library(DMwR)
+library(UBL)
+```
+
+\tableofcontents 
+\newpage
+
+```{r}
+# Function that calculates the misclassification rate
+classification.function <- function(pred, response){
+  # Misclassification rate
+  error.rate <- mean(pred != response)
+  
+  # Output the misclassification rate
+  return('Test Error Rate'=error.rate)
+}
+```
+
+# Abstract
+Handwriting recognition is the ability of a computer to receive and interpret handwriting from paper, photographs, touch-screens, etc. There are two types of handwriting recognition: off-line recognition and on-line recognition. In off-line recognition, input is scanned from text on a piece of paper written in the past. In on-line recognition, input is obtained from text as it is written on devices such as tablets and smart phones. Inputs are then converted into bitmaps that can be interpreted by the computer. In this project, we will focus on off-line recognition.
+
+# 1. Problem Statement
+In off-line recognition, the image of the written text is optically scanned then converted into bitmaps that are usable within computer applications. Off-line recognition is difficult compared to on-line recognition since different people have different handwriting styles and on-line recognition has the advantage of sensing the pen-tip movements across the writing surface.
+
+# 2. Background
+We have been given two datasets:
+
+- letters.unlabeled.csv: Is a csv file composed of 10,000 unlabeled handwritten characters.
+- letters.labeled.csv: Is a csv file composed of 1,000 labeled handwritten characters.
+
+The goal of this project is to use both datasets to construct multiple classifiers, then use the best classifier to predict the characters for a third dataset composed of 30,000 unlabeled handwritten characters.
+
+# 3. Exploratory Data Analysis
+First, we look at the structure of the labeled data (letters.labeled.csv) and unlabeled data (letters.unlabeled.csv).
+
+```{r}
+# Load letters.labeled.csv
+letters.labeled <- read.csv('letters.labeled.csv')
+# Load letters.unlabeled.csv
+letters.unlabeled <- read.csv('letters.unlabeled.csv')
+```
+
+```{r}
+# Dimensions 
+# Labeled: 1000 rows/observations, 3138 columns (obs num + label + 3136 predictors/pixels)
+cat('Labeled data dimensions:', dim(letters.labeled), '\n')
+# Unlabeled: 10,000 rows/observations, 3137 columns (obs num + 3136 predictors/pixels)
+cat('Unlabeled data dimensions:', dim(letters.unlabeled))
+
+# Labels 
+labels <- letters.labeled$Letter
+```
+
+\newpage
+
+```{r}
+# Examine a snippet of the labeled data (first 10 rows and first 7 columns)
+kable(letters.labeled[1:10, 1:7], caption='Snippet of the Labeled Data (First 10 Rows and First 7 Columns)')
+
+# Examine a snippet of the unlabeled data (first 10 rows and first 7 columns)
+kable(letters.unlabeled[1:10, 1:7], caption='Snippet of the Unlabeled Data (First 10 Rows and First 7 Columns)')
+```
+
+The labeled data has 1,000 rows or observations and 3,138 columns. The first column is simply an index or observation number, which we can drop. The second column (*Letter*) is the label or class for each character, i.e. it is the response variable. Columns three to 3,138 (*Pixel.1* to *Pixel.3136*) represent the 3,136 pixels in the 56 by 56 bitmap. These pixels are the predictors and are binary, taking on a value of 0 if the pixel is white and a value of 1 if the pixel is black. 
+
+The unlabeled data has 10,000 rows or observations and 3,137 columns. Similar to the labeled data, the first column of the unlabeled data is an index, which we can drop; however, the unlabeled data does not contain *Letter* (the response variable). 
+
+```{r}
+# Remove index columns
+letters.labeled <- letters.labeled[,-1]
+letters.unlabeled <- letters.unlabeled[,-1]
+
+# Check for NA values
+cat('Number of NA values:', sum(is.na(letters.labeled)) + sum(is.na(letters.unlabeled)))
+```
+
+A neat thing about both the labeled and unlabeled data is that there are no missing values, which makes our analysis easier. 
+
+**Figure 1** plots the pixels of the first 36 characters from the labeled data, and **Figures 2** and **3** plot the pixel means and standard deviations of each character, respectively. We see that there is a large amount of variance in the data.
+
+```{r}
+# Create a color ramp and pallete 
+colors<-c('lightgrey','slateblue')
+cus_col<-colorRampPalette(colors=colors)
+
+# Plot pixels of first 36 characters from labeled data
+par(mfrow=c(6,6),pty='s',mar=c(1,1,1,1),xaxt='n',yaxt='n')
+for(i in 1:36){
+  z<-array(as.matrix(letters.labeled[i,-1]), dim=c(56,56))
+  z<-t(z[56:1,]) ##right side up
+  image(1:56,1:56,z,main=letters.labeled[i,1],col=cus_col(256), ylab="")
+  #print(i)
+}
+```
+\begin{center}
+Figure 1: Plot of the pixels of the first 36 characters from the labeled data.
+\end{center}
+
+```{r}
+# Plot pixel means of each character from labeled data
+Letters.lab=sort(unique(letters.labeled$Letter))
+# length(Letters.lab)
+par(mfrow=c(6,6),pty='s',mar=c(1,1,1,1),xaxt='n',yaxt='n')
+all_img<-array(dim=c(length(Letters.lab),56*56))
+for(iter in 1:length(Letters.lab)){
+  all_img[iter,]<-apply(letters.labeled[letters.labeled[,1]==Letters.lab[iter],-1], 2, mean)
+  z<-array(all_img[iter,],dim=c(56,56))
+  z<-t(z[56:1,]) ##right side up
+  image(1:56,1:56,z,main=Letters.lab[iter],col=cus_col(256), ylab="")
+}
+```
+\begin{center}
+Figure 2: Plot of the pixel means of each character from the labeled data.
+\end{center}
+
+```{r}
+# Plot pixel standard deviations of each character from labeled data
+Letters.lab=sort(unique(letters.labeled$Letter))
+# length(Letters.lab)
+par(mfrow=c(6,6),pty='s',mar=c(1,1,1,1),xaxt='n',yaxt='n')
+all_img<-array(dim=c(length(Letters.lab),56*56))
+for(iter in 1:length(Letters.lab)){
+  all_img[iter,]<-apply(letters.labeled[letters.labeled[,1]==Letters.lab[iter],-1], 2, sd)
+  z<-array(all_img[iter,],dim=c(56,56))
+  z<-t(z[56:1,]) ##right side up
+  image(1:56,1:56,z,main=Letters.lab[iter],col=cus_col(256), ylab="")
+}
+```
+\begin{center}
+Figure 3: Plot of the pixel standard deviations of each character from the labeled data.
+\end{center}
+
+```{r}
+# Count of each alpha-numeric class in the labeled data
+theme_update(plot.title=element_text(hjust=0.5))
+ggplot(data=NULL, aes(x=labels)) + geom_bar() + geom_text(stat='count', aes(label=..count..), vjust=-0.4) +
+  labs(title='Count of Each Alpha-Numeric Class in the Labeled Data', x='Character', y='Count')
+```
+\begin{center}
+Figure 4: Count of each alpha-numeric class in the labeled data.
+\end{center}
+
+**Figure 4** shows the count of each alpha-numeric class in the labeled data. We see that the classes are heavily unbalanced, ranging from 122 observations for the letter *n* and 3 observations each for the numbers 2 and 8. We should also note that there is no letter *x* in this data. Overall, there are far fewer numbers than letters (54 numbers vs. 946 letters). 
+
+# 4. Labeling the Unlabeled Data
+First, we manually label the unlabeled data based on human judgment. Some of the 0's/o's and 1's/i's are impossible to tell apart, so for those characters, we initially label them as "0 or o" and "1 or i".
+
+```{r}
+# Load manually labeled letters.unlabeled
+letters.unlabeled.manual.labels <- read.csv('letters.unlabeled.manual.labels.csv')
+letters.unlabeled.manual.labels <- cbind(letters.unlabeled.manual.labels, letters.unlabeled[1:nrow(letters.unlabeled.manual.labels), ])
+```
+
+## 4.1 Labeling 0's and o's in the Unlabeled Data
+We fit a random forest model to the 0's and o's from the labeled data. Then, we use that model to predict the labels for the characters initially labeled as "0 or o" from the unlabeled data. However, in order for the predictions to not be dominated by o's, we oversample and undersample the 0's and o's, respectively, from the labeled data. As shown in the output below, 77 of those characters were predicted to be 0's, and 672 were predicted to be o's.
+
+```{r}
+set.seed(1)
+# Subset 0's and o's from labeled data
+a <- letters.labeled[letters.labeled$Letter == '0' | letters.labeled$Letter == 'o', ]
+a$Letter <- factor(a$Letter)
+# Balance the 0's and o's using SMOTE
+a <- SMOTE(Letter ~ ., data=a)
+#table(a$Letter)
+# Subset characters labeled as "0 or o" from unlabeled data
+tmp.unlabeled <- subset(letters.unlabeled.manual.labels, Letter == '0 or o')
+
+# Fit a random forest on the 0's and o's from labeled data
+model <- randomForest(Letter ~ ., data=a)
+# Predicted labels for characters labeled as "0 or o" from unlabeled data
+pred <- predict(model, newdata=tmp.unlabeled)
+summary(pred)
+
+# Row numbers of predicted 0's and o's
+rownum <- as.numeric(names(pred[pred==0]))
+rownum2 <- as.numeric(names(pred[pred=='o']))
+
+# Add new factor levels for 0's and o's
+levels(letters.unlabeled.manual.labels$Letter) <- c(levels(letters.unlabeled.manual.labels$Letter), '0', 'o')
+
+# Change "0 or o" from unlabeled data to predicted labels
+letters.unlabeled.manual.labels$Letter[rownum] <- '0'
+letters.unlabeled.manual.labels$Letter[rownum2] <- 'o'
+letters.unlabeled.manual.labels$Letter <- factor(letters.unlabeled.manual.labels$Letter)
+```
+
+**Figure 5** shows the plot of the pixels of 36 of the characters intially labeled as "0 or o" from the unlabeled data. The random forest predicted labels are shown above each image. Interestingly, all of these characters look about the same, but random forest was able to classify them nevertheless.
+
+```{r}
+# Plot pixels of 36 characters from unlabeled data
+par(mfrow=c(6,6),pty='s',mar=c(1,1,1,1),xaxt='n',yaxt='n')
+for(i in 1:36){
+  z<-array(as.matrix(letters.unlabeled.manual.labels[letters.unlabeled.manual.labels$Letter==0 | 
+                                                       letters.unlabeled.manual.labels$Letter=='o', ][i,-1]), dim=c(56,56))
+  z<-t(z[56:1,]) ##right side up
+  image(1:56,1:56,z,main=letters.unlabeled.manual.labels[letters.unlabeled.manual.labels$Letter==0 | 
+                                                       letters.unlabeled.manual.labels$Letter=='o', ][i,1],col=cus_col(256), ylab="")
+  #print(i)
+}
+```
+\begin{center}
+Figure 5: Plot of the pixels of 36 of the characters initially labeled as "0 or o" from the unlabeled data.
+\end{center}
+
+## 4.2 Labeling 1's and i's in the Unlabeled Data
+We fit a random forest model to the 1's and i's from the labeled data. Then, we use that model to predict the labels for the characters initially labeled as "1 or i" from the unlabeled data. However, in order for the predictions to not be dominated by i's, we oversample and undersample the 1's and i's, respectively, from the labeled data. As shown in the output below, 71 of those characters were predicted to be 1's, and 477 were predicted to be i's.
+
+
+```{r}
+set.seed(1)
+# Subset 1's and i's from labeled data
+b <- letters.labeled[letters.labeled$Letter == '1' | letters.labeled$Letter == 'i', ]
+b$Letter <- factor(b$Letter)
+# Balance the 1's and i's using SMOTE
+b <- SMOTE(Letter ~ ., data=b)
+#table(b$Letter)
+# Subset characters labeled as "1 or i" from unlabeled data
+tmp.unlabeled <- subset(letters.unlabeled.manual.labels, Letter == '1 or i')
+
+# Fit a random forest on the 1's and i's from labeled data
+model2 <- randomForest(Letter ~ ., data=b)
+# Predicted labels for characters labeled as "1 or i" from unlabeled data
+pred2 <- predict(model2, newdata=tmp.unlabeled)
+summary(pred2)
+
+# Row numbers of predicted 1's and i's
+rownum <- as.numeric(names(pred2[pred2==1]))
+rownum2 <- as.numeric(names(pred2[pred2=='i']))
+
+# Change "1 or i" from unlabeled data to predicted labels
+letters.unlabeled.manual.labels$Letter[rownum] <- '1'
+letters.unlabeled.manual.labels$Letter[rownum2] <- 'i'
+letters.unlabeled.manual.labels$Letter <- factor(letters.unlabeled.manual.labels$Letter)
+```
+
+**Figure 6** shows the plot of the pixels of 36 of the characters intially labeled as "1 or i" from the unlabeled data. The random forest predicted labels are shown above each image. Interestingly, all of these characters look about the same, but random forest was able to classify them nevertheless. 
+
+```{r}
+# Plot pixels of 36 characters from unlabeled data
+par(mfrow=c(6,6),pty='s',mar=c(1,1,1,1),xaxt='n',yaxt='n')
+for(i in 1:36){
+  z<-array(as.matrix(letters.unlabeled.manual.labels[letters.unlabeled.manual.labels$Letter==1 | 
+                                                       letters.unlabeled.manual.labels$Letter=='i', ][i,-1]), dim=c(56,56))
+  z<-t(z[56:1,]) ##right side up
+  image(1:56,1:56,z,main=letters.unlabeled.manual.labels[letters.unlabeled.manual.labels$Letter==1 | 
+                                                       letters.unlabeled.manual.labels$Letter=='i', ][i,1],col=cus_col(256), ylab="")
+  #print(i)
+}
+```
+\begin{center}
+Figure 6: Plot of the pixels of 36 of the characters initially labeled as "1 or i" from the unlabeled data.
+\end{center}
+
+## 4.3 Distribution of the Labels of the Unlabeled Data (After Labeling)
+No doubt our technique for labeling would result in errors; this is inherent in the identical appearance of some 0's/o's, 1's/i's, etc. **Figure 7** shows the count of each alpha-numeric class in the unlabeled data (after labeling). We see that the distribution of the labels of the unlabeled data is similar to that of the labeled data; however, we probably overestimated the number of 0's and 1's. Again, this is due to the identical appearance of some 0's/o's and 1's/i's.
+
+```{r}
+factor.levels <- c('0','1','2','3','4','5','6','7','8','9','a','b','c','d','e','f','g','h','i','j',
+                   'k','l','m','n','o','p','q','r','s','t','u','v','w','y','z')
+# Reorder factor levels
+letters.unlabeled.manual.labels$Letter <- factor(letters.unlabeled.manual.labels$Letter, levels=factor.levels)
+```
+
+```{r}
+# Count of each alpha-numeric class in the unlabeled data after labeling
+ggplot(data=NULL, aes(x=letters.unlabeled.manual.labels$Letter)) + geom_bar() + geom_text(stat='count', aes(label=..count..), vjust=-0.4) +
+  labs(title='Count of Each Alpha-Numeric Class in the Unlabeled Data \n(After Labeling)', x='Character', y='Count')
+```
+\begin{center}
+Figure 7: Count of each alpha-numeric class in the unlabeled data (after labeling).
+\end{center}
+
+# 5. Dealing with the Unbalanced Classes in the Unlabeled Data
+Since the classes in the unlabeled data are heavily unbalanced, any model we train will be biased towards the more common classes, resulting in a deceptively high accuracy. To combat this problem, we apply oversampling to the minority classes and undersampling to the majority classes. SMOTE (Synthetic Minority Over-Sampling Technique) is an algorithm that artificially generates new examples of the minority classes by considering their K-nearest neighbors in feature space; this method is known as oversampling. In addition, the majority classes are undersampled, leading to a more balanced dataset [7]. We apply oversampling and undersampling to the unlabeled data using **SmoteClassif** from the **UBL** package. The resulting distribution of the classes in the unlabeled data is shown below:
+
+```{r}
+# Balance the classes
+letters.unlabeled.balanced <- SmoteClassif(Letter ~ ., dat=letters.unlabeled.manual.labels, k=5, C.perc='balance')
+summary(letters.unlabeled.balanced$Letter)
+```
+
+We see that the data is now balanced.
+
+# 6. Choosing the Training and Validation Sets
+Unlike most situations in which we randomly split a dataset into training and validation sets, we will use the unlabeled data (after labeling and applying oversampling and undersampling) as the training set and the labeled data as the validation set to get an unbiased estimate of the test error. From here on out, when we mention the training set, we are referring to the unlabeled data, and when we mention the validation set, we are referring to the labeled data. The training set has 10,004 observations, and the validation set has 1,000 observations. 
+
+# 7. Principal Component Analysis (PCA)
+We can use PCA to reduce dimensionality in order to visualize the data in two-dimensional space. In situations like this in which the number of predictor variables is very large, PCA can also be used to reduce dimensionality in order to deal with multicollinearity. As an unsupervised learning technique, PCA can extract patterns from data with only a set of features and no associated response variable. We use **prcomp()** to perform PCA on the training set. 
+
+PCA allows us to summarize the original variables with a smaller number of variables that collectively explain most of the variability in the data [1]. The first principal component is a linear combination of the predictors that has the largest variance. Each succeeding principal component has the largest variance out of all linear combinations with the constraint that it is orthogonal to the preceding principal components. In this way, we can use the principal component scores as the predictors instead of the original predictors/pixels.
+
+```{r}
+# Use manually labeled unlabeled data as training
+train.x <- letters.unlabeled.balanced[,-1]
+train.y <- letters.unlabeled.balanced$Letter
+# Use labeled data as validation
+test.x <- letters.labeled[,-1]
+test.y <- letters.labeled$Letter
+
+# Perform PCA on training
+pr.out <- prcomp(train.x)
+```
+
+```{r}
+# Variance explained by each principal component
+pr.var <- pr.out$sdev^2
+# PVE by each principal component
+pve <- round(100*pr.var/sum(pr.var), 2)
+# PVE by first five principal components
+cat('PVE by first five principal components:', paste0(pve[1:5], '%'))
+```
+
+We see that the first principal component explains only 6.8% of the variance in the data, the second principal component explains only 5.4% of the variance, and so forth. 
+
+```{r, fig.height=4, fig.width=10}
+# 70% variance explained in first 80 components
+cat('PVE of the first 80 components:', paste0(round(cumsum(pve)[80], 3), '%'))
+
+# PVE of the principal components
+p1 <- ggplot(data=NULL, aes(x=1:3136, y=pve)) + geom_point(color='#E69F00') + geom_line(color='#E69F00') +
+  labs(title='PVE of the Principal Components', y='PVE', x='Principal Component') +
+  geom_vline(xintercept=80, linetype='dashed')
+
+# Cumulative PVE of the principal components
+p2 <- ggplot(data=NULL, aes(x=1:3136, y=cumsum(pve))) + geom_point(color='#56B4E9') + geom_line(color='#56B4E9') +
+  labs(title='Cumulative PVE of the Principal Components', 
+       y='Cumulative PVE', x='Principal Component') + geom_vline(xintercept=80, linetype='dashed')
+
+grid.arrange(p1, p2, ncol=2)
+```
+\begin{center}
+Figure 8: The PVE of the principal components of the training set (left) and the cumulative PVE of the principal components of the training set (right).
+\end{center}
+
+**Figure 8** shows the proportion of variance explained (PVE) and the cumulative PVE of the principal components of the training set.
+
+The first 80 components explain only about 70% of the variance in the data. However, the left-hand plot of **Figure 8** (scree plot) shows there is an "elbow" after approximately 80 components; that is, there is a marked decrease in the PVE by further components. Thus, we can use the first 80 component scores as the new predictors for the training and validation sets. Compared to the original 3,316 predictors/pixels, we have greatly reduced the dimensionality.
+
+```{r}
+# Transform predictors to principal component scores
+train.pca.x <- pr.out$x[, 1:80]
+test.pca.x <- as.matrix(test.x) %*% as.matrix(pr.out$rotation[, 1:80])
+
+# Transformed training and validation sets using principal component scores as predictors
+train.pca <- cbind.data.frame(Letter=train.y, train.pca.x)
+test.pca <- cbind.data.frame(Letter=test.y, test.pca.x)
+```
+
+# 8. Classification Methods
+We will fit various classification models to the training set with *Letter* as the response and the first 80 principal component scores as the predictors. We then test and compare these models by evaluating their performance on the validation set (validation set approach). Since the classes in the training set are unbalanced, we will also calculate the test error rates for each character. The models we will consider are the classification tree, random forest, linear discriminant analysis, K-nearest neighbors, and support vector machine. Recall that we are now using the first 80 principal component scores as the predictors for the training and validation sets.
+
+## 8.1 Classification Tree (rpart)
+The classification tree is an easy to explain and easily interpretable method to predict a qualitative response. Tree-based methods involve dividing the predictor space into a number of regions. Each observation is predicted to belong to the most commonly occurring class of training observations in the region to which it belongs. The classification tree is grown through recursive binary splitting, in which the Gini index is used as the criterion for making the binary splits. The Gini index is a measure of node purity -- a small value indicates that a node contains mostly observations from a single class [1].
+
+We use **rpart()** from the **rpart** package to construct a classification tree on the training set to predict the character labels. We draw the tree using **rpart.plot()** from the **rpart.plot** package.
+
+```{r}
+set.seed(1)
+# Classification tree
+model.rpart <- rpart(Letter ~ ., data=train.pca, method='class')
+```
+
+```{r, fig.height=6, fig.width=9}
+# Graph the tree
+rpart.plot(model.rpart, box.palette=0, extra=2, cex=0.7, main='Classification Tree (PCA Training Set)')
+```
+\begin{center}
+Figure 9: Classification Tree of the training set.
+\end{center}
+
+**Figure 9** shows the fitted classification tree. We see that there are 11 terminal nodes. The label at the bottom of each internal node indicates the variable being split and the value of the split point. For example, the split at the top of the tree results in two branches. The left-hand branch corresponds to $PC4 \ge -5.7$, and the right-hand branch corresponds to *PC4* < -5.7. The letter in each node is the mode or most commonly occurring class for the observations that fall there. The fraction in each node is the number of correct classifications over the number of observations in the node. For example, in the first terminal node, the mode is the number 3, and there are 203 correct classifications out of 797 observations in that node.
+
+Printing the cp table of the fitted tree produces some summary statistics.
+
+```{r}
+# cptable (lowest CV error occurs at 13 splits, i.e. no pruning necessary)
+printcp(model.rpart)
+```
+
+We see that only 7 out of the 80 principal components were used in tree construction. The lowest cross-validation error occurs at 13 splits or 14 terminal nodes, which means we do not need to prune the tree. 
+
+```{r}
+#### Validation set approach (VSA)
+# Predicted test labels
+pred.rpart <- predict(model.rpart, newdata=test.pca, type='class')
+
+# Validation set error rate 
+val.err.rpart <- classification.function(pred.rpart, test.pca$Letter)
+cat('VSA test error:', val.err.rpart)
+```
+
+The validation set error rate of the classification tree is 0.911. There is significant room for improvement.
+
+The individual test errors are:
+
+```{r}
+#### Individual test errors
+ind.err.rpart <- c()
+for (i in 1:35){
+  confusion.mat.rpart <- errormatrix(test.pca$Letter, pred.rpart, relative=FALSE)
+  ind.err.rpart[i] <- round(confusion.mat.rpart[i, 36]/summary(letters.labeled$Letter)[i], 2)
+}
+names(ind.err.rpart) <- factor.levels 
+ind.err.rpart
+```
+
+## 8.2 Random Forest
+By aggregating multiple trees, using a method like random forest, we can construct more accurate prediction models. Random forest constructs multiple trees and makes predictions based on the mode or most commonly occurring class of the individual trees. 
+
+We use **randomForest()** from the **randomForest** package to perform random forest on the training set. In random forest, only a random subset of the predictors is considered for each split; by default, **randomForest()** uses $m \approx \sqrt{p}$ when building a random forest of classification trees. In this case, *m* = 9 since there are 80 predictors/principal components. This is in contrast to bagging, which considers all of the predictors for each split. Therefore, if there are strong predictors in the data, all of the trees will look similar to each other, leading to highly correlated predictions. Using a subset of the predictors decorrelates the trees, which makes the average of the resulting trees less variable and hence more reliable [1].
+
+```{r}
+# Random forest
+set.seed(1)
+model.rf <- randomForest(Letter ~ ., data=train.pca)
+```
+
+```{r}
+#### Validation set approach (VSA)
+# Predicted test labels
+pred.rf <- predict(model.rf, newdata=test.pca)
+
+# Validation set error rate
+val.err.rf <- classification.function(pred.rf, test.pca$Letter)
+cat('VSA test error:', val.err.rf)
+```
+
+The validation set error rate of random forest is 0.374. This is a significant improvement over the single classification tree.
+
+The individual test errors are:
+
+```{r}
+#### Individual test errors
+ind.err.rf <- c()
+for (i in 1:35){
+  confusion.mat.rf <- errormatrix(test.pca$Letter, pred.rf, relative=FALSE)
+  ind.err.rf[i] <- round(confusion.mat.rf[i, 36]/summary(letters.labeled$Letter)[i], 2)
+}
+names(ind.err.rf) <- factor.levels 
+ind.err.rf
+```
+
+## 8.3 Linear Discriminant Analysis (LDA)
+Linear discriminant analysis models the distributions of the predictors separately for each of the classes, and then it uses Bayes' theorem to estimate the probability of each class [2]. A test observation is assigned to the class with the largest probability. To use LDA, we assume that the observations within each class are drawn from a normal distribution with a class-specific mean vector and a common covariance matrix.   
+We use **lda()** from the **MASS** package to fit a LDA model to the training set.
+
+```{r}
+# LDA
+model.lda <- lda(Letter ~ ., data=train.pca)
+```
+
+```{r}
+#### Validation set approach (VSA)
+# Predictioned test labels
+pred.lda <- predict(model.lda, newdata=test.pca, type='response')
+
+# Validation set error rate
+val.err.lda <- classification.function(pred.lda$class, test.pca$Letter)
+cat('VSA test error:', val.err.lda)
+```
+
+The validation set error rate of LDA is 0.340.
+
+The individual test errors are:
+
+```{r}
+#### Individual test errors
+ind.err.lda <- c()
+for (i in 1:35){
+  confusion.mat.lda <- errormatrix(test.pca$Letter, pred.lda$class, relative=FALSE)
+  ind.err.lda[i] <- round(confusion.mat.lda[i, 36]/summary(letters.labeled$Letter)[i], 2)
+}
+names(ind.err.lda) <- factor.levels 
+ind.err.lda
+```
+
+## 8.4 K-Nearest Neighbors (KNN)
+K-nearest neighbors is a non-parametric classifier. In the KNN algorithm, a test observation is assigned to the class most common among its *K* nearest neighbors (*K* closest training observations) in the feature space, where *K* is a positive integer. For example, with *K*=1, a test observation is simply assigned to the class of the single closest training observation.  
+
+```{r, out.width="0.5\\linewidth"}
+# 1NN and 5NN example
+knitr::include_graphics(c('Map1NN.png', 'Map5NN.png'))
+```
+\begin{center}
+Figure 10: The 1NN (left) and 5NN classification maps (right) [3][4].
+\end{center}
+
+**Figure 10** illustrates 1NN and 5NN involving three classes (red, green, and blue). Each pixel is classified according to the class of the nearest neighbor (1NN) or the most common class among five nearest neighbors (5NN). White regions correspond to ties, e.g. two green, two red, and one blue among five nearest neighbors.
+
+We use **knn()** from the **class** package to perform KNN on the training set. A simple rule of thumb is to use $K = \sqrt{n}$, where *n* is the number of training observations [5]. In this case, $K = \sqrt{10000} = 100$. However, we should experiment with different values of *K* and choose the value that produces the lowest validation error. For a sequence from 2 to 100, we find that the best value of *K* is 3.    
+
+```{r}
+# KNN
+error <- c()
+# Experiment with different values of K
+for (i in seq(2, 100, by=1)){
+  set.seed(1)
+  pred.knn <- knn(train.pca.x, test.pca.x, train.pca$Letter, k=i)
+  error[i] <- classification.function(pred.knn, test.pca$Letter)
+}
+
+# Best value of K
+bestK <- which.min(error)
+cat('Best value of K:', bestK)
+```
+
+```{r}
+#### Validation set approach (VSA)
+set.seed(1)
+# Predicted test labels
+pred.knn <- knn(train.pca.x, test.pca.x, train.pca$Letter, k=bestK)
+
+# Validation set error rate
+val.err.knn <- error[bestK]
+cat('VSA test error:', val.err.knn)
+```
+
+The validation set error rate of KNN (*K*=3) is 0.237. 
+
+The individual test errors are:
+
+```{r}
+#### Individual test errors
+ind.err.knn <- c()
+for (i in 1:35){
+  confusion.mat.knn <- errormatrix(test.pca$Letter, pred.knn, relative=FALSE)
+  ind.err.knn[i] <- round(confusion.mat.knn[i, 36]/summary(letters.labeled$Letter)[i], 2)
+}
+names(ind.err.knn) <- factor.levels 
+ind.err.knn
+```
+
+## 8.5 Support Vector Machine (SVM)
+A support vector machine is a classifier defined by a separating hyperplane. In two-dimensional space, this hyperplane is a line that separates the classes. Given a labeled training set, a SVM constructs an optimal hyperplane that creates the largest separation, or margin, between the classes. A test observation is then classified based on which side of the hyperplane it lies.
+
+```{r, out.width="0.5\\linewidth", fig.align="center"}
+# SVM separating hyperplanes example
+knitr::include_graphics('Svm_separating_hyperplanes.png')
+```
+\begin{center}
+Figure 11: Example of how a SVM would choose a separating hyperplane [6].
+\end{center}
+
+**Figure 11** shows how a SVM would choose a separating hyperplane for two classes of observations (black and white circles). $H_1$ does not separate the classes. $H_2$ separates the classes but does not create the largest margin. $H_3$ separates the classes with the largest margin and hence is the maximal margin hyperplane. 
+
+We fit a support vector classifier (linear SVM) to the training set with various values of cost (0.001, 0.01, 0.1, 1, 5, 10, 100). We use **tune()** from the **e1071** library to perform 10-fold cross-validation on the set of models under consideration. To save time, we use a random 10% of the training set for tuning. The cross-validation errors for these models can be accessed using **summary()** (not shown due to computation time).
+
+```{r}
+set.seed(1)
+# Use 10% of the training for tuning
+sample <- createDataPartition(train.pca$Letter, p=0.1, list=F)
+train.pca.sample <- train.pca[sample,]
+```
+
+```{r, eval=F}
+set.seed(1)
+# Support vector classifier with various values of cost
+linear.tune.out <- tune(svm, Letter ~ ., data=train.pca.sample, kernel='linear', ranges=list(cost=c(0.001, 0.01, 0.1, 1, 5, 10, 100)))
+summary(linear.tune.out)
+```
+
+We find that cost=0.1 results in the lowest CV error rate at 0.344.
+
+```{r, eval=F}
+# Support vector classifier
+linear.svm <- svm(Letter ~ ., data=train.pca, kernel='linear', cost=0.1)
+summary(linear.svm)
+```
+
+Next, we fit an SVM with radial basis kernels with various values of cost (1, 5, 10, 50, 100, 125, 150) and gamma (0.001, 0.01, 0.1, 1). We use **tune()** to perform 10-fold cross-validation on the set of models under consideration. The cross-validation errors for these models can be accessed using **summary()** (not shown due to computation time).
+
+```{r, eval=F}
+set.seed(1)
+# Radial SVM with various values of gamma and cost
+radial.tune.out <- tune(svm, Letter ~ ., data=train.pca.sample, kernel='radial', ranges=list(cost=c(1, 5, 10, 50, 100, 125, 150),
+                                                                                     gamma=c(0.001, 0.01, 0.1, 1)))
+summary(radial.tune.out)
+```
+
+We find that cost=5 and gamma=0.01 result in the lowest CV error rate at 0.301.
+
+```{r}
+# SVM with radial basis kernels
+radial.svm <- svm(Letter ~ ., data=train.pca, kernel='radial', cost=5, gamma=0.01)
+```
+
+Finally, we fit an SVM with polynomial basis kernels with various values of cost (1, 5, 10, 50, 100, 125, 150) and degree (2, 3, 4, 5). The cross-validation errors for these models can be accessed using **summary()** (not shown due to computation time).
+
+```{r, eval=F}
+set.seed(1)
+# Polynomial SVM with various values of degree and cost
+poly.tune.out <- tune(svm, Letter ~ ., data=train.pca.sample, kernel='polynomial', ranges=list(cost=c(1, 5, 10, 50, 100, 125, 150),
+                                                                                        degree=2:5))
+summary(poly.tune.out)
+```
+
+We find that cost=50 and degree=2 result in the lowest CV error rate at 0.402.
+
+```{r, eval=F}
+# SVM with polynomial basis kernels
+poly.svm <- svm(Letter ~ ., data=train.pca, kernel='polynomial', cost=50, degree=2)
+summary(poly.svm)
+```
+
+Among the SVM's, the SVM with radial basis kernels performed the best; hence, we will use that model to compute the validation set test error. The summary of the fitted radial SVM using cost=5 and gamma=0.01 is shown below:
+
+```{r}
+# Summary of SVM with radial basis kernels
+summary(radial.svm)
+```
+
+```{r}
+### Validation set approach (VSA)
+# Predicted test labels
+pred.svm <- predict(radial.svm, newdata=test.pca)
+
+# Validation set error rate
+val.err.svm <- classification.function(pred.svm, test.pca$Letter)
+cat('VSA test error:', val.err.svm)
+```
+
+The validation set error rate of the SVM with radial basis kernels (cost=5, gamma=0.01) is 0.216.
+
+The individual test errors are:
+
+```{r}
+#### Individual test errors
+ind.err.svm <- c()
+for (i in 1:35){
+  confusion.mat.svm <- errormatrix(test.pca$Letter, pred.svm, relative=FALSE)
+  ind.err.svm[i] <- round(confusion.mat.svm[i, 36]/summary(letters.labeled$Letter)[i], 2)
+}
+names(ind.err.svm) <- factor.levels 
+ind.err.svm
+```
+
+## 8.6 Summary of Classification Methods
+The test error rate estimates from the validation set approach (VSA) for the various classification methods are compared in **Table 3**.
+
+```{r}
+# Vector of model names
+model.vector <- c('Classification Tree', 'Random Forest', 'LDA', 'KNN (K=3)', 'Radial SVM (cost=5, gamma=0.01)')
+
+# Matrix of test error rates
+err.matrix <- round(rbind(val.err.rpart, val.err.rf, val.err.lda, val.err.knn, val.err.svm), 4)
+rownames(err.matrix) <- NULL
+colnames(err.matrix) <- 'VSA'
+
+dt <- cbind(Method=model.vector, err.matrix)
+kable(dt, align='l', caption='Test Error Rate Comparison for the Classification Methods')
+```
+
+Both KNN and SVM with radial basis kernels performed well. SVM had the lowest validation set test error, but KNN had lower individual test errors for the sparse characters such as the digits. On the other hand, the single classification tree by far performed the worst. Thus, we recommend KNN if the individual test errors are important; otherwise, if a lower overall error rate is the priority, we recommend SVM. Since the classes in the training set are heavily unbalanced, the overall error rate is not a good performance measure; thus, we recommend KNN for most circumstances.
+
+\newpage
+
+# 9. Conclusion
+In this project, we were given a labeled dataset with 1,000 labeled handwritten characters and an unlabeled dataset with 10,000 unlabeled handwritten characters. We manually labeled the unlabeled data based on human judgment. In most cases, 0's/o's and 1's/i's are impossible to tell apart, so we labeled these as "0 or o" and "1 or i" respectively. Then, we used random forest to try to separate the 0's from the o's and the 1's from the i's. To deal with the heavily unbalanced classes in the unlabeled data, we applied oversampling to the minority classes and undersampling to the majority classes.  
+
+We then used the unlabeled data (after labeling and applying oversampling/undersampling) as the training set and the labeled data as the validation set to get an unbiased estimate of the test error. Based on the proportion of variance explained (PVE) or "scree" plot, we chose 80 as the number of principal components to use; thus, we have reduced the dimensionality from 3,316 predictors or pixels to 80 predictors or principal component scores.
+
+With the first 80 principal component scores as the new predictors, we fit the following models on the training set: classification tree, random forest, LDA, KNN, and support vector machines (linear, radial, and polynomial kernels). We then used the validation set approach to estimate the test error rate of each model. For each model, we also calculated the test error rate of each character. It was found that KNN with K = 3 performed the best in terms of the individual test error rates, and SVM with radial basis kernels (cost=5, gamma=0.01) performed the best in terms of the overall error rate. Since the classes in the training set are unbalanced, the overall error rate is not a good performance measure; thus, we recommend KNN as the best model.
+
+Finally, we will use our chosen classifier (KNN with K = 3) to predict the labels of the 30,000 unlabeled characters. However, this is just the first step in constructing an automated handwriting recognition system. For future work, we could focus on improving discernibility between "0" and "O", "1" and "I", "5" and "S", etc. Since the characters in the data are heavily unbalanced, we can improve our results by obtaining more examples for the sparse characters such as the digits. And lastly, we should explore semi-supervised learning techniques, which make use of both labeled and unlabeled data.     
+
+# References
+[1] James, G., Witten, D., Hastie, T., & Tibshirani, R. (2013). *An Introduction to Statistical Learning: with Applications in R*. New York, NY: Springer.
+
+[2] Peixeiro, M. (2018, December 11). *Classification -- Linear Discriminant Analysis*. Retrieved from https://towardsdatascience.com/classification-part-2-linear-discriminant-analysis-ea60c45b9ee5
+
+[3] By Agor153 - Own work, CC BY-SA 3.0, https://commons.wikimedia.org/w/index.php?curid=24350615
+
+[4] By Agor153 - Own work, CC BY-SA 3.0, https://commons.wikimedia.org/w/index.php?curid=24350617
+
+[5] Thirumuruganathan, S. (2010, May 17). A Detailed Introduction to K-Nearest Neighbor (KNN) Algorithm [Blog post]. Retrieved from https://saravananthirumuruganathan.wordpress.com/2010/05/17/a-detailed-introduction-to-k-nearest-neighbor-knn-algorithm/
+
+[6] User:ZackWeinberg, based on PNG version by User:Cyc [CC BY-SA 3.0 (https://creativecommons.org/licenses/by-sa/3.0)]
+
+[7] Chawla, N. V., Bowyer, K. W., Hall, L. O., and Kegelmeyer, W. P. (2002). *Smote: Synthetic minority over-sampling technique*. Journal of Artificial Intelligence Research, 16:321-357.
+
+
+```{r, eval=F}
+#### Predicting the labels for the 30,000 unlabeled characters
+# Combine the unlabeled and labeled data
+combined.data <- rbind(letters.unlabeled.balanced, letters.labeled)
+
+# Perform PCA on the combined data
+pr.out2 <- prcomp(combined.data[, -1])
+```
+
+```{r, eval=F}
+# Load Final.data3.csv (30,000 unlabeled characters)
+letters.unlabeled.final <- read.csv('Final.data3.csv')
+# Remove first column
+letters.unlabeled.final <- letters.unlabeled.final[, -1]
+# Remove row 11,727
+letters.unlabeled.final <- letters.unlabeled.final[-11727, ]
+```
+
+```{r, eval=F}
+# Transform predictors to principal component scores
+train.pca.x2 <- pr.out2$x[, 1:80]
+test.pca.x2 <- as.matrix(letters.unlabeled.final) %*% as.matrix(pr.out2$rotation[, 1:80])
+
+train.pca2 <- cbind.data.frame(Letter=combined.data$Letter, train.pca.x2)
+```
+
+```{r, eval=F}
+# KNN
+pred.knn2 <- knn(train.pca.x2, test.pca.x2, train.pca2$Letter, k=bestK)
+tmp <- as.character(pred.knn2)
+
+letters.unlabeled.final.with.pred <- data.frame(Letter=tmp)
+```
+
+```{r, eval=F}
+# Write result to CSV
+write.csv(x=letters.unlabeled.final.with.pred, file='letters.unlabeled.final.csv', row.names=F)
+```
+
+```{r, eval=F}
+letters.unlabeled.final <- cbind(pred.knn2, letters.unlabeled.final)
+```
+
+```{r, eval=F}
+# Plot pixels of 36 characters from unlabeled data 
+par(mfrow=c(6,6),pty='s',mar=c(1,1,1,1),xaxt='n',yaxt='n')
+for(i in 800:835){
+  mm<-array(as.matrix(letters.unlabeled.final[i,-1]), dim=c(56,56))
+  mm<-t(mm[56:1,]) ##right side up
+  image(1:56,1:56,mm,main=letters.unlabeled.final[i,1],col=cus_col(256), ylab="")
+  #print(i)
+}
+```
