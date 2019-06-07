@@ -1,0 +1,350 @@
+---
+title: "STAT 601 Final Project"
+author: "Yuchi Hu"
+date: "November 18, 2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message=F,warning=F,echo=F,fig.height=3,fig.width=5,cache=F)
+```
+
+```{r install, eval=F}
+# Install packages used in this project
+install.packages(ggplot2)
+install.packages(rpart)  
+install.packages(ggdendro)  
+install.packages(quantreg)  
+install.packages(lme4)  
+install.packages(multcomp)  
+install.packages(knitr)  
+install.packages(gee)  
+install.packages(geepack)  
+install.packages(MESS)  
+```
+
+```{r libraries}
+# Load packages used in this project
+library(ggplot2)
+library(rpart)  # Regression tree
+library(ggdendro)  # Plots regression tree using ggplot2
+library(quantreg)  # Quantile regression
+library(lme4)  # Linear mixed-effects
+library(multcomp)  # Multiple comparisons
+library(knitr)  # Creates tables
+library(gee)  # Generalized estimating equations
+library(geepack)  # Generalized estimating equations
+library(MESS)  # QIC comparison
+```
+
+# Abstract
+Keystroke dynamics is the analysis of the timing, or rhythm, of an individual's typing on a computer keyboard. Detailed timing information on when each key is pressed and released is collected to describe an individual's typing rhythm, which can be thought of as a digital fingerprint. Similar to how physical fingerprints at a crime scene can be used to uniquely identify suspects, typing rhythms can be used to distinguish between a genuine user and an impostor.
+
+Our objective in this project is to investigate how a person's typing dynamics changes over time. We will be building and comparing different models based on the data set collected by Kevin Killourhy and Roy Maxion of Carnegie Mellon University [1]. 
+
+# 1. Problem Statement
+Killourhy and Maxion [1] collected a data set and developed an evaluation procedure to measure and compare the performances of 14 anomaly-detection algorithms for keystroke dynamics. The data set is comprised of various timing features such as time between key presses and time each key is held down. We will analyze this data set to investigate how a person's typing dynamics changes over time. For example, does a person's typing speed increase over time? How do capital letters, numbers, and special characters affect a person's typing dynamics? And so forth.   
+
+# 2. Background
+The data was collected from 51 subjects from Carnegie Mellon University [1]. Each subject completed 8 data-collection sessions with at least one day between sessions. During a data-collection session, subjects are required to correctly type a password 50 times. The password chosen is **.tie5Roanl**, which is representative of a strong 10-character password. When the subject presses or releases a key, the keyboard records the event as keydown or keyup, the name of the key, and the time the event occurred. 
+
+The first three variables of this data set are *subject* (for the 51 subjects), *sessionIndex* (for the 8 sessions), and *rep* (for the 50 times the password is entered for each session). The rest of the variables contain timing information for keydown-keydown times, keyup-keydown times, and hold times for the keys in the password. For example, *H.period* is the amount of time the "." key is held down; *DD.period.t* is the amount of time between the presses of the "." and "t" keys; and *UD.period.t* is the amount of time between the release of the "." key and the press of the "t" key.
+
+Since we are interested in how a person's typing dynamics changes over time, the total time it takes to type the password will be the response variable, which can be obtained indirectly from the data set by summing the "DD" (keydown-keydown) variables and the final "H" (hold) variable (*H.Return*). Note that we are not including the "UD" (keyup-keydown) variables in the sum due to time overlap. 
+
+# 3. Exploratory Analysis
+
+## 3.1 Timing Variables (Keydown-keydown, Keyup-keydown, and Hold)
+
+```{r}
+# Load the data
+x <- read.table('C:\\Users\\George\\Desktop\\ModernAppliedStatisticsI\\DSL-StrongPasswordData.txt', header=T)
+```
+
+First, we examine the box plots of the timing variables on separate plots, grouped by name ("DD", "UD", and "H"). 
+
+```{r,fig.height=6,fig.width=10}
+par(mfrow=c(2,2))
+
+# Box plots of "DD" variables
+boxplot(x[grep('DD', names(x))], outline=F, las=2, cex.axis=0.7,
+        ylab='Time (in seconds)', main='Keydown-keydown Times')
+# Box plots of "UD" variables
+boxplot(x[grep('UD', names(x))], outline=F, las=2, cex.axis=0.7,
+        ylab='Time (in seconds)', main='Keyup-keydown Times')
+# Box plots of "H" variables
+boxplot(x[grep('H', names(x))], outline=F, las=2, cex.axis=0.7,
+        ylab='Time (in seconds)', main='Hold Times')
+```
+\begin{center}
+Figure 1: Box plots of keydown-keydown, keyup-keydown, and hold times.
+\end{center}
+
+We can see from **Figure 1** that keydown-keydown ("DD") and keyup-keydown ("UD") times follow essentially the same pattern; however, "DD" times are longer than their corresponding "UD" times. The similar patterns of the "DD" and "UD" plots indicate that the two groups of variables are highly correlated and thus redundant. If we look at the patterns more closely, we can see that typing two lowercase letters sequentially takes shorter amounts of time (the variabilities in those times are also smaller) than other combinations of characters. This makes sense since typing "R" (capital r) requires pressing an extra key ("Shift") and pressing the ".", "5", and "Return" keys are more difficult due to finger placement. 
+
+As for hold ("H") times, we would expect all of the keys to be held down for about the same amount of time. But interestingly, the "a" key appears to be held down the longest. It is not so obvious why this is the case. 
+
+Note that outliers are not displayed to improve visualization.
+
+\newpage
+
+## 3.2 Total Time (Response Variable)
+Next, we examine histograms of the response variable *total.time*, which represents the total time it takes to type the password and is obtained by summing the "DD" variables and the final "H" variable (*H.Return*). 
+
+```{r}
+# Create a new data frame containing only the "DD" (keydown-keydown) variables and H.Return
+x2 <- data.frame(x[grep('DD', names(x))], H.Return=x$H.Return) 
+# Sum the "DD" variables and H.Return to obtain total time
+x$total.time <- rowSums(x2)
+
+# Histogram of total time
+theme_update(plot.title=element_text(hjust=0.5))
+ggplot(data=x, aes(x=total.time)) + geom_histogram(binwidth=1) + 
+  labs(title='Total Time', x='Time (in seconds)') +
+  scale_x_continuous(breaks=seq(1, 37, by=2))
+```
+\begin{center}
+Figure 2: Histogram of total time.
+\end{center}
+
+We can see from **Figure 2** that *total.time* follows a right-skewed distribution and that the total time it takes to type the password is about two seconds in most of the cases. Note that the plot has quite a bit of empty space which is caused by the unusual *total.time* value of 36 seconds. We will assume that unusual values are simply due to slow typing.
+
+We might also be interested in how *total.time* changes with each session since we would naturally assume a subject to become more proficient in typing the password over time.  
+
+```{r}
+# Box plots of total.time grouped by sessionIndex
+boxplot(total.time ~ sessionIndex, data=x, outline=F, ylab='Time (in seconds)', xlab='Session', 
+        main='Total Time by Session')
+```
+\begin{center}
+Figure 3: Box plots of total time by session.
+\end{center}
+
+We can see from **Figure 3** that *total.time* decreases from session 1 to session 4 then stabilizes thereafter, which is indicative of the subjects becoming more and more proficient until no further improvements were possible. 
+
+Similarly, we would expect subjects to become more proficient as they progress through a session; that is, we would expect *total.time* to decrease as *rep* increases within a session. 
+
+```{r}
+# Mean total time by rep
+rep.mean <- aggregate(x$total.time, by=list(x$rep), FUN=mean)
+# Scatter plot of mean total time by rep
+ggplot(data=rep.mean, aes(x=1:50, y=x)) + geom_point() + 
+  labs(title='Mean Total Time by Rep', y='Time (in seconds)', x='Rep')
+```
+\begin{center}
+Figure 4: Scatter plot of mean total time by rep.
+\end{center}
+
+We can see from **Figure 4** that there's a relatively significant decrease in *total.time* from rep 1 to rep 2. From rep 2, *total.time* steadily decreases until about rep 15; from there, no further improvements in proficiency can be discerned.
+
+## 3.3 Summary
+From the exploratory analysis, we found that typing two lowercase letters sequentially takes shorter amounts of time than other combinations of characters. We also found that typing proficiency improves from session 1 to session 4 as well as from rep 1 to rep 15 within a session. 
+
+\newpage
+
+# 4. Models
+
+## 4.1 Multiple Linear Regression
+We fit a multiple linear regression model with *total.time* as the response and *sessionIndex*, *rep*, and the interaction of *sessionIndex* and *rep* as the predictors. The summary of the model is below:
+
+```{r}
+# Fitted multiple linear regression model
+x.lm <- glm(total.time ~ sessionIndex * rep, data=x)
+# Model summary
+summary(x.lm)
+```
+
+We can see that both predictors as well as the interaction term are highly significant at an alpha level of 0.05. The AIC of the model is 61670.
+
+## 4.2 Regression Tree
+We fit an rpart (recursive partitioning and regression trees) model using the **rpart** function from the **rpart** package with *total.time* as the response and *sessionIndex* and *rep* as the predictors. We plot the regression tree using the **ggdendro** package.
+
+```{r}
+set.seed(1)
+# Fitted rpart model
+x.rpart <- rpart(total.time ~ sessionIndex + rep, data=x, method='anova', control=rpart.control(minsplit=10))
+
+# Prune the tree
+opt <- which.min(x.rpart$cptable[,'xerror'])
+cp <- x.rpart$cptable[opt, 'CP']
+x.prune <- prune(x.rpart, cp=cp)
+
+# Plot of regression tree
+x.pruner <- dendro_data(x.prune)
+ggplot() + geom_segment(data=x.pruner$segments, aes(x=x, y=y, xend=xend, yend=yend)) + 
+  geom_text(data=x.pruner$labels, aes(x=x, y=y, label=label), size=4, vjust=0) +
+  geom_text(data=x.pruner$leaf_labels, aes(x=x, y=y, label=label), size=4, vjust=1) + theme_dendro() + 
+  labs(title='Regression Tree of Total Time')
+```
+\begin{center}
+Figure 5: Regression tree of total time.
+\end{center}
+
+We can see from **Figure 5** that *total.time* is lower for larger values of *sessionIndex* and for larger values of *rep*, which indicates increased typing proficiency in later sessions and later reps within a session.
+
+## 4.3 Quantile Regression
+We plot *total.time* vs. *sessionIndex* and *total.time* vs. *rep* separately, overlaid with linear quantile regression lines for the 25% (red), 50% (blue), and 75% (green) quantiles. Note that the data points are omitted from the plots due to clutter.
+
+```{r}
+# Plot of quantile regression models for total time vs. session
+ggplot(data=x, aes(y=total.time, x=sessionIndex)) +  
+  geom_quantile(data=x, method='rq', formula=y~x, quantiles=0.25, color='red') +
+  geom_quantile(data=x, method='rq', formula=y~x, quantiles=0.5, color='blue') +
+  geom_quantile(data=x, method='rq', formula=y~x, quantiles=0.75, color='green') +
+  labs(title='Total Time vs. Session \n(25%, 50%, and 75% Quantile Regression Models)', 
+       y='Time (in seconds)', x='Session') + ylim(1.5, 3.5)
+```
+\begin{center}
+Figure 6: 25\%, 50\%, and 75\% quantile regression models for total time vs. session.
+\end{center}
+
+```{r}
+# Plot of quantile regression models for total time vs. rep
+ggplot(data=x, aes(y=total.time, x=rep)) + 
+  geom_quantile(data=x, method='rq', formula=y~x, quantiles=0.25, color='red') +
+  geom_quantile(data=x, method='rq', formula=y~x, quantiles=0.5, color='blue') +
+  geom_quantile(data=x, method='rq', formula=y~x, quantiles=0.75, color='green') +
+  labs(title='Total Time vs. Rep \n(25%, 50%, and 75% Quantile Regression Models)', 
+       y='Time (in seconds)', x='Rep') + ylim(1.5, 3.5)
+```
+\begin{center}
+Figure 7: 25\%, 50\%, and 75\% quantile regression models for total time vs. rep.
+\end{center}
+
+We can see from **Figure 6** that the slopes of the quantile regression lines are approximately equal and decreasing with each subsequent session.  On the other hand, we can see from **Figure 7** that only the slope of the 75% quantile regression line is noticeably decreasing with each subsequent rep. 
+
+In other words, with each subsequent session, subjects of all typing speeds are becoming more proficient. Whereas, with each subsequent rep, the slow typers (in the 75% quantile of *total.time*) are becoming more proficient, but the typing speeds of the faster typers (in the 25% and 50% quantile of *total.time*) are barely affected, if at all, with more reps.
+
+```{r}
+# Fitted 25%, 50%, and 75% quantile regression models
+x.rq1 <- rq(total.time ~ sessionIndex * rep, data=x, tau=0.25)
+x.rq2 <- rq(total.time ~ sessionIndex * rep, data=x, tau=0.5)
+x.rq3 <- rq(total.time ~ sessionIndex * rep, data=x, tau=0.75)
+
+# Table of AIC comparison of quantile regression models
+dt <- rbind('25% Quantile'=AIC(x.rq1), 'Median'=AIC(x.rq2), '75% Quantile'=AIC(x.rq3))
+kable(dt, caption='AIC Comparison of Quantile Regression Models')
+```
+
+**Table 2** shows the AIC's of the quantile regression models. The increasing trend of the AIC's indicates that *total.time* is more variable in the upper quantiles.  
+
+\newpage
+
+## 4.4 Linear Mixed-Effects
+We fit a random intercept model and a random intercept and slope model using the **lmer** function from the **lme4** package with *sessionIndex*, *rep*, and the interaction between *sessionIndex* and *rep* as fixed effect covariates. For the random intercept model, *subject* is included as a random effect, while for the random intercept and slope model, *sessionIndex* and *subject* are included as random effects (random slope and random intercept, respectively). Random effects identify the source of the repeated measurements.
+
+The summary of the random intercept model is below:
+
+```{r}
+# Fitted random intercept model
+x.lme1 <- lmer(total.time ~ sessionIndex * rep + (1 | subject), data=x, REML=F)
+# Fitted random intercept and slope model
+x.lme2 <- lmer(total.time ~ sessionIndex * rep + (sessionIndex | subject), data=x, REML=F)
+
+# Random intercept model summary
+summary(x.lme1)
+```
+
+And the summary of the random intercept and slope model is below:
+
+```{r}
+# Random intercept and slope model summary
+summary(x.lme2)
+```
+
+```{r}
+# Table of AIC comparison of linear mixed-effects models
+dt <- rbind('Random Intercept'=AIC(x.lme1), 'Random Intercept and Slope'=AIC(x.lme2))
+kable(dt, caption='AIC Comparison of Linear Mixed-Effects Models')
+```
+
+**Table 2** shows the AIC's of the two linear mixed-effects models. We can see that the random intercept and slope model has a lower AIC and thus is a better fit for the data.
+
+Additionally, a random slope and intercept model might be more sensible since it allows each individual's regression line to differ in intercept and in slope from the regression lines of other individuals. This is in contrast to a random intercept model, in which an individual's regression line can differ in intercept but not in slope from the regression lines of other individuals. Furthermore, a random intercept model constrains the variance of each repeated measure to be the same and the covariance between any pair of measurements to be equal. These constraints are often not realistic for repeated measures data [2]. Thus, a random slope and intercept model is more appropriate since it allows a more realistic structure for the covariances.
+
+\newpage
+
+## 4.5 Generalized Estimating Equations
+We fit two GEE models with independence and exchangeable correlation structures. The summaries of the two GEE models are below:
+
+```{r,results=F}
+# Fitted GEE models with independence and exchangeable correlation structures, respectively
+x.gee1 <- gee(total.time ~ sessionIndex * rep, data=x, id=subject, family='gaussian',
+                 corstr='independence', scale.fix=T, scale.value=1)
+x.gee2 <- gee(total.time ~ sessionIndex * rep, data=x, id=subject, family='gaussian',
+                 corstr='exchangeable', scale.fix=T, scale.value=1)
+```
+
+```{r}
+# Summary tables of GEE models 
+kable(summary(x.gee1)$coefficients, 
+      caption='Summary for the x.gee1 Model (Correlation Structure = Independence)')
+kable(summary(x.gee2)$coefficients, 
+      caption='Summary for the x.gee2 Model (Correlation Structure = Exchangeable)')
+```
+
+We can see from **Table 4** that the exchangeable correlation model has naive and robust standard errors that are closer to each other, indicating that it is a better model than the independence correlation model. We can also compare their QIC's using the **QIC** function from the **MESS** package. The outputs of the **QIC** function for each model are summarized in the table below:
+
+```{r}
+# Fitted GEE models using geeglm (QIC comparison requires geeglm objects)
+x.gee1 <- geeglm(total.time ~ sessionIndex * rep, data=x, id=subject, family='gaussian',
+                 corstr='independence', scale.fix=T)
+x.gee2 <- geeglm(total.time ~ sessionIndex * rep, data=x, id=subject, family='gaussian',
+                 corstr='exchangeable', scale.fix=T)
+
+# Table of QIC comparison of GEE models
+dt <- cbind(QIC(x.gee1), QIC(x.gee2))
+kable(dt, col.names=c('Independence', 'Exchangeable'), caption='QIC Comparison of GEE Models')
+```
+
+We can see from **Table 5** that the exchangeable correlation model has the lower QIC, indicating again that it is better than the independence correlation model. 
+
+\newpage
+
+## 4.6 Multiple Comparisons
+We perform a multiplicity adjusted test on all regression coefficients (except for the intercept) being zero. We set up a matrix $K$, which reads:
+
+```{r}
+# Matrix K
+K <- cbind(0, diag(length(x.lm$coefficients)-1))
+rownames(K) <- names(x.lm$coefficients[-1])
+K
+```
+
+The **glht** function takes the fitted linear regression model and a description of the matrix $K$ to perform a multiplicity adjusted test. The summary of the **glht** object is below:
+
+```{r}
+# glht
+x.glht <- glht(x.lm, linfct=K)
+# glht summary
+summary(x.glht)
+```
+
+We can see that all of the regression coefficients are still significant at an alpha level of 0.05.
+
+We may also be interested in the pairwise differences between the mean *total.time* of each session. 
+
+```{r}
+# Fitted ANOVA model
+x.aov <- aov(total.time ~ as.factor(sessionIndex), data=x)
+# Tukey HSD
+TukeyHSD(x.aov)
+```
+
+We can see that most of the pairwise differences between sessions are significant except the ones between sessions 4 & 5, 5 & 6, 6 & 7, 6 & 8, and 7 & 8. This is an indication that typing proficiency significantly improves from session to session until session 4 but only marginally improves thereafter.
+
+In the case of multiple testing, we are testing whether the coefficients are significant simultaneously, and the resulting p-values are adjusted for the family-wise error rate. Essentially, multiple testing procedures take the correlation among the estimated coefficients of interest into account when computing p-values [2]. The p-values obtained from the multiplicity adjusted test are computed from data of ALL the comparisons, so the p-value of a specific comparison would change if the data of the other comparisons or the number of comparisons is changed.
+
+# 5. Conclusion
+From the multiple linear regression model, we found that both *sessionIndex* and *rep* as well as their interaction are highly significant at an alpha level of 0.05. From the regression tree, we saw that there are three splits: *sessionIndex* $\ge$ 3.5, *sessionIndex* $\ge$ 1.5, and *rep* $\ge$ 8.5. In other words, typing proficiency tends to be higher (lower *total.time*) at later sessions and later reps within a session. From the quantile regression models, we found that subjects of all typing speeds became more proficient with each subsequent session, while only the slow typers (in the 75% quantile of *total.time*) became more proficient with each subsequent rep.
+
+In the previous models, we assumed that the data is independent. However, since each subject typed the password 50 times in a session as well as participated in eight different sessions, we cannot make that assumption. Thus, we included *subject* and *sessionIndex* + *subject* as random effects in the random intercept and random intercept and slope models (linear mixed-effects models), respectively. We found that the random intercept and slope model is a better fit for the data. For the generalized estimating equations, we found that the model with the exchangeable correlation structure is better than that with the independence correlation structure.  
+
+The question of which model is the best is rather open-ended. We have found interesting patterns in *total.time* from the regression tree and quantile regression plots; however, they assume that the data is independent. Since this study is longitudinal, a mixed-effects model or a generalized estimating equation approach is preferable. GEE's model the **population average** effect of the covariates, while mixed-effects models model the **subject-specific** effect of the covariates. Which one we choose will depend on whether we are interested in the population average effect or subject-specific effect of the covariates.
+
+\newpage
+
+# References
+[1] Killourhy, K. & Maxion, R. (2009). Comparing Anomaly Detectors for Keystroke Dynamics. *39th Annual International Conference on Dependable Systems & Networks*, 125-134.
+
+[2] Everitt, B. & Hothorn, T. (2014). *A Handbook of Statistical Analyses using R, Third Edition*. Boca Raton, FL: CRC Press.
