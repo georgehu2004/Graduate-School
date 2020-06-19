@@ -1,0 +1,662 @@
+---
+title: "STAT 560 Final"
+author: "Yuchi Hu"
+date: "November 21, 2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message=F,warning=F,echo=T,cache=F,fig.height=6,fig.width=10)
+```
+
+# 1.
+Analyze the attached final_data1 by three methods: ARIMA, exponential smoothing, and linear regression. The first column of final_data1 is the year; the second column is the coal production.
+
+## 1.1 ARIMA model
+
+## 1.1.1
+Fit an ARIMA model to this time series, excluding the last 10 observations.
+
+## Answer
+First, we examine the time series plot, ACF, and PACF of final_data1 (excluding the last 10 observations).
+
+```{r,fig.height=6,fig.width=9,echo=F}
+# Load the final_data1 data
+final_data1 <- read.csv('C:\\Users\\George\\Desktop\\TimeSeriesAnalysis\\final_data1.csv')
+
+layout(matrix(c(1,1,2,3), 2, 2, byrow=T))
+# Time series plot
+plot(coal_production[1:47] ~ year[1:47], data=final_data1, type='o', pch=16, cex=0.8,
+     main='Time Series Plot of final_data1', ylab='Coal Production', xlab='Year')
+
+# ACF and PACF
+acf(final_data1$coal_production[1:47], lag.max=25, main='ACF of final_data1')
+acf(final_data1$coal_production[1:47], lag.max=25, type='partial', main='PACF of final_data1')
+```
+\begin{center}
+Figure 1: Time series plot, ACF, and PACF of final\_data1.
+\end{center}
+
+**Figure 1** shows the time series plot, ACF, and PACF of final_data1. The data exhibits an upward trend (nonstationary). The ACF decays slowly, and the PACF cuts off after lag 1. Thus, we could fit an **AR(1)** model. Since the data appears nonstationary, we proceed with taking the first difference of the data.
+
+```{r,fig.height=6,fig.width=9,echo=F}
+# First difference
+final_data1.wt <- diff(final_data1$coal_production[1:47])
+
+layout(matrix(c(1,1,2,3), 2, 2, byrow=T))
+# Time series plot
+plot(c(NA, final_data1.wt), type='o', pch=16, cex=0.8, 
+     main='Time Series Plot of the First Difference w(t) of final_data1', 
+     ylab=expression(w[t]), xlab='Year')
+
+# ACF and PACF
+acf(final_data1.wt, lag.max=25, main='ACF of w(t) of final_data1')
+acf(final_data1.wt, lag.max=25, type='partial', main='PACF of w(t) of final_data1')
+```
+\begin{center}
+Figure 2: Time series plot, ACF, and PACF of the first difference $w_t$ of final\_data1.
+\end{center}
+
+**Figure 2** shows the time series plot, ACF, and PACF of the first difference $w_t$ of final_data1. The first difference of the data appears stationary, and the ACF and PACF do not indicate any significant autocorrelation. Thus, we could fit an **ARIMA(0,1,0)** model as well.
+
+Putting it all together, we fit an AR(1) and an ARIMA(0,1,0) model to the data (excluding the last 10 observations) then compare their AIC's.
+
+```{r,echo=F}
+# Fitted models (AR(1) and ARIMA(0,1,0) respectively)
+library(forecast)
+ar1 <- Arima(final_data1$coal_production[1:47], order=c(1, 0, 0))
+arima010 <- Arima(final_data1$coal_production[1:47], order=c(0, 1, 0), include.drift=T)
+
+# Table of AIC comparison
+library(knitr)
+dt <- rbind('AR(1)'=ar1$aic, 'ARIMA(0,1,0)'=arima010$aic)
+kable(dt, col.names='AIC', caption='AIC Comparison')
+```
+
+\newpage
+
+**Table 1** shows the AIC's of the fitted models. We can see that the ARIMA(0,1,0) model has the lowest AIC. The output for the ARIMA(0,1,0) model is below:
+
+```{r,echo=F}
+# Output for ARIMA(0,1,0) model 
+arima010
+```
+
+The parameter estimate is $\hat{\delta}=12008.778$, so the fitted ARIMA(0,1,0) model is
+$$y_t=12008.778+y_{t-1}+\epsilon_t$$
+
+```{r}
+# Fitted values
+fit.arima010 <- as.vector(fitted(arima010))
+
+# ARIMA fitted values plot
+plot(final_data1$coal_production ~ year, data=final_data1, type='p', pch=16, 
+    main='ARIMA Fitted Values Plot for final_data1', ylab='Coal Production', xlab='Year')
+lines(1949:1995, fit.arima010)
+legend('topleft', c('Actual', 'Fitted'), pch=c(16, NA), lty=c(NA, 1))
+```
+\begin{center}
+Figure 3: Fitted values for the ARIMA(0,1,0) model of final\_data1.
+\end{center}
+
+**Figure 3** shows the fitted values for the ARIMA(0,1,0) model of final_data1.
+
+## 1.1.2
+Forecast the last 10 observations. Calculate the mean squared error (MSE) and the mean absolute percent forecast error (MAPE).
+
+## Answer
+At year 1995, we make the one-step-ahead forecast for 1996. Then when data for 1996 is available, we make the one-step-ahead forecast for 1997, and so on. At each year from 1996-2004, we also update the ARIMA model as we update the actual values.
+
+```{r}
+arima010 <- Arima(final_data1$coal_production[1:47], order=c(0, 1, 0), include.drift=T)
+
+# One-step ahead ARIMA forecast and prediction limits for year 1996
+forecast.arima010 <- forecast(arima010, h=1)$mean
+lpl <- forecast(arima010, h=1)$lower[,2]
+upl <- forecast(arima010, h=1)$upper[,2]
+
+a <- final_data1$coal_production[1:47]
+# One-step ahead ARIMA forecasts and prediction limits for years 1997-2005
+for (i in 1:9) {
+  # Updated actual value
+  a[47+i] <- final_data1$coal_production[47+i]
+  # Updated ARIMA model
+  arima010 <- Arima(a, order=c(0, 1, 0), include.drift=T)
+  # Vector of forecasted values
+  forecast.arima010 <- c(forecast.arima010, forecast(arima010, h=1)$mean)
+  # Vectors of prediction limits
+  lpl <- c(lpl, forecast(arima010, h=1)$lower[,2])
+  upl <- c(upl, forecast(arima010, h=1)$upper[,2])
+}
+
+# ARIMA forecast plot
+plot(final_data1$coal_production[1:47] ~ year[1:47], data=final_data1, type='p', pch=16, 
+     xlim=c(1949, 2005), ylim=c(420000, 1223000), 
+     main='ARIMA Forecasts for final_data1\n(1996-2005)', ylab='Coal Production', xlab='Year')
+points(1996:2005, final_data1$coal_production[48:57])
+lines(1996:2005, forecast.arima010)
+lines(1996:2005, lpl, lty=2)
+lines(1996:2005, upl, lty=2)
+legend('topleft', pch=c(16,1,NA,NA), lty=c(NA,NA,1,2), bty='n', 
+       legend=c('Actual (1949-1995)','Actual (1996-2005)', 
+                'Forecast', '95% Prediction Intervals'))
+```
+\begin{center}
+Figure 4: One-step ahead ARIMA forecasts for final\_data1 from 1996-2005.
+\end{center}
+
+**Figure 4** shows the one-step ahead ARIMA forecasts for final_data1 from 1996-2005.
+
+Next, we calculate the mean squared error (MSE) and mean absolute percentage error (MAPE) of the ARIMA forecasts.
+
+```{r}
+# ARIMA forecast errors
+error.arima010 <- final_data1$coal_production[48:57] - forecast.arima010
+
+# MSE and MAPE of ARIMA forecasts
+MSE.arima011 <- sum(error.arima010^2) / 10
+MAPE.arima011 <- 100*sum(abs(error.arima010/final_data1$coal_production[48:57])) / 10
+
+dt <- rbind(MSE=MSE.arima011, MAPE=MAPE.arima011)
+kable(dt, caption='MSE and MAPE of ARIMA Forecasts')
+```
+
+**Table 2** shows the MSE and MAPE of the ARIMA forecasts.
+
+## 1.1.3
+Show how to obtain the 95% prediction intervals (PIs) for the forecasts in part 1.1.2). Your answer should include how to obtain the linear filter $\psi_i$s for $y_{t+\tau}$, the formula of calculating PIs and the calculated intervals.
+
+## Answer
+The product of the required polynomials for the ARIMA(0,1,0) model is
+$$(\psi_0+\psi_1B+\psi_2B^2+\psi_3B^3+...)(1-B)=1$$
+Equating like power of B, we find that
+
+$B^0:\psi_0=1$
+
+$B^1:\psi_1-\psi_0=0 \rightarrow \psi_1=1$
+
+$B^2:\psi_2-\psi_1=0 \rightarrow \psi_2=1$
+
+$B^3:\psi_3-\psi_2=0 \rightarrow \psi_3=1$
+
+In general, we can show for the ARIMA(0,1,0) model that $\psi_j=\psi_{j-1}=1$.
+
+The variance of the forecast error is
+
+$Var[e_T(\tau)]=\sigma^2\sum_{i=0}^{\tau-1}\psi_i^2=\sigma^2\tau$
+
+Thus, the $100(1-\alpha)$ percent prediction interval for $y_{T+\tau}$ is
+
+$\hat{y}_{T+\tau}(T) \pm Z_{\alpha/2}*\sqrt{Var[e_T(\tau)]}$ or $\hat{y}_{T+\tau}(T) \pm Z_{\alpha/2}*\sigma\sqrt{\tau}$
+
+For $\tau=1$ the prediction interval becomes
+
+$\hat{y}_{T+1}(T) \pm Z_{\alpha/2}*\sigma$
+
+The calculated intervals are displayed in the table below:
+
+```{r}
+# Table of ARIMA forecasts and prediction intervals from 1996-2005
+dt <- cbind(Year=1996:2005, Forecast=forecast.arima010, '95% LPL'=lpl, '95% UPL'=upl)
+kable(dt, row.names=F, caption='ARIMA Forecasts and 95% Prediction Intervals (1996-2005)')
+```
+
+**Table 3** shows the ARIMA forecasts and 95% prediction intervals for final_data1 from 1996-2005.
+
+## 1.2 Exponential Smoothing method
+
+## 1.2.1
+Use an exponential smoothing with the optimum value of $\lambda$ to smooth the data, excluding the last 10 observations. Let the range of $\lambda$ be [0.3, 1].
+
+## Answer
+First, we need to find the optimal $\lambda$. The optimal $\lambda$ for a linear trend process is the $\lambda$ value that minimizes the sum of squared prediction errors (SSE) of the second smoothing.
+
+```{r,fig.height=3,fig.width=6,echo=F}
+# First-order (simple) exponential smoothing function
+firstsmooth <- function(y, lambda, start=y[1]) {
+  ytilde <- y
+  ytilde[1] <- lambda*y[1] + (1-lambda)*start
+  for (i in 2:length(y)) {
+    ytilde[i] <- lambda*y[i] + (1-lambda)*ytilde[i-1]
+  }
+  ytilde
+}
+
+# Measures of accuracy function for second-order exponential smoothing
+measacc.so <- function(y, lambda) {
+  fir.exp <- firstsmooth(y, lambda)
+  sec.exp <- firstsmooth(fir.exp, lambda)
+  out <- 2*fir.exp-sec.exp
+  
+  T <- length(y)
+  
+  pred <- c(y[1], out[1:(T-1)])
+  prederr <- y-pred
+  SSE <- sum(prederr^2)
+  MAPE <- 100*sum(abs(prederr/y))/T
+  MAD <- sum(abs(prederr))/T
+  MSD <- sum(prederr^2)/T
+  ret1 <- c(SSE, MAPE, MAD, MSD)
+  names(ret1) <- c('SSE', 'MAPE', 'MAD', 'MSD')
+  return(ret1)
+}
+
+optimize.so <- function(smoothing.data, lambda=seq(0.3, 1, 0.00001), type=c('graph', 'lambda value')) {
+  sse.data <- function(lambdas) {measacc.so(smoothing.data, lambdas)[1]}
+  sse.vec <- sapply(lambda, sse.data)
+  opt.lambda <- lambda[sse.vec == min(sse.vec)]
+
+  # Graphical display of SSE vs. lambda   
+  if(type == 'graph') {
+  plot(lambda, sse.vec, type='b', pch='.', main='SSE vs. lambda \n', xlab='lambda\n', ylab='SSE')
+  abline(v=opt.lambda, col='red')
+  mtext(text=paste('SSE min = ', round(min(sse.vec),3), '\n lambda = ', opt.lambda))
+  }
+  # Returns the value for the optimal lambda
+  else if (type == 'lambda value') {
+    return(opt.lambda)
+  }
+}
+
+# Find the optimal lambda value
+optimize.lambda <- optimize.so(final_data1$coal_production[1:47], type='graph')
+```
+\begin{center}
+Figure 5: SSE vs. $\lambda$.
+\end{center}
+
+**Figure 5** shows the SSE vs. $\lambda$. We can see that the optimal $\lambda$ is 0.50535.
+
+We use second-order exponential smoothing on the data (excluding the last 10 observations) with $\lambda$ = 0.50535.
+
+```{r}
+y <- final_data1$coal_production[1:47]
+smooth1 <- firstsmooth(y=y, lambda=0.50535)
+smooth2 <- firstsmooth(y=smooth1, lambda=0.50535)
+# Fitted values
+fit.smooth <- 2*smooth1-smooth2
+
+# Exponential smoothing fitted values plot
+plot(final_data1$coal_production ~ year, data=final_data1, type='p', pch=16, 
+    main='Exponential Smoothing Fitted Values Plot for final_data1 \n(lambda = 0.50535)', 
+    ylab='Coal Production', xlab='Year')
+lines(1949:1995, fit.smooth)
+legend('topleft', c('Actual', 'Fitted'), pch=c(16, NA), lty=c(NA, 1))
+```
+\begin{center}
+Figure 6: Fitted values for the second-order exponential smoothing of final\_data1.
+\end{center}
+
+**Figure 6** shows the fitted values for the second-order exponential smoothing of final_data1.
+
+## 1.2.2
+Forecast the last 10 observations. Calculate the mean squared error (MSE) and the mean absolute percent forecast error (MAPE).
+
+## Answer
+At year 1995, we make the one-step-ahead forecast for 1996. Then when data for 1996 is available, we make the one-step-ahead forecast for 1997, and so on. 
+
+```{r}
+# One-step ahead exponential smoothing forecasts for years 1996-2005
+lambda <- 0.50535
+T <- 47
+tau <- 10
+alpha.lev <- .05
+forecast.smooth <- rep(0, tau)
+cl <- rep(0, tau)
+smooth1 <- rep(0, T+tau)
+smooth2 <- rep(0, T+tau)
+for (i in 1:tau) {
+  smooth1[1:(T+i-1)] <- firstsmooth(y=final_data1$coal_production[1:(T+i-1)], lambda=lambda)
+  smooth2[1:(T+i-1)] <- firstsmooth(y=smooth1[1:(T+i-1)], lambda=lambda)
+  forecast.smooth[i] <- (2+(lambda/(1-lambda)))*smooth1[T+i-1]-(1+(lambda/(1-lambda)))*smooth2[T+i-1]
+  y.hat <- 2*smooth1[1:(T+i-1)]-smooth2[1:(T+i-1)]
+  sig.est <- sqrt(var(final_data1$coal_production[2:(T+i-1)]- y.hat[1:(T+i-2)]))
+  cl[i] <- qnorm(1-alpha.lev/2)*sig.est
+}
+
+# Exponential smoothing forecast plot
+plot(final_data1$coal_production[1:T] ~ year[1:T], data=final_data1, type='p', pch=16, 
+     xlim=c(1949,2005), ylim=c(420000, 1223000),
+     main='Exponential Smoothing Forecasts for final_data1\n(1996-2005, lambda = 0.50535)',
+     ylab='Coal Production', xlab='Year')
+points(1996:2005, final_data1$coal_production[(T+1):(T+tau)])
+lines(1996:2005, forecast.smooth)
+lines(1996:2005, forecast.smooth+cl, lty=2)
+lines(1996:2005, forecast.smooth-cl, lty=2)
+legend('topleft', pch=c(16,1,NA,NA), lty=c(NA,NA,1,2), bty='n', 
+       legend=c('Actual (1949-1995)','Actual (1996-2005)',
+                'Forecast', '95% Prediction Intervals'))
+```
+\begin{center}
+Figure 7: One-step ahead second-order exponential smoothing forecasts for final\_data1 from 1996-2005.
+\end{center}
+
+**Figure 7** shows the one-step ahead second-order exponential smoothing forecasts for final_data1 from 1996-2005.
+
+Next, we calculate the mean squared error (MSE) and mean absolute percentage error (MAPE) of the exponential smoothing forecasts.
+
+```{r}
+# Exponential smoothing forecast errors
+error.smooth <- final_data1$coal_production[48:57] - forecast.smooth
+
+# MSE and MAPE of exponential smoothing forecasts
+MSE.smooth <- sum(error.smooth^2) / 10
+MAPE.smooth <- 100*sum(abs(error.smooth/final_data1$coal_production[48:57])) / 10
+
+dt <- rbind(MSE=MSE.smooth, MAPE=MAPE.smooth)
+kable(dt, caption='MSE and MAPE of Exponential Smoothing Forecasts')
+```
+
+**Table 4** shows the MSE and MAPE of the exponential smoothing forecasts.
+
+## 1.2.3
+Show how to obtain the 95% prediction intervals for the forecasts in part 1.2.2). Your answer should include the formula of calculating PIs and the calculated intervals.
+
+## Answer
+The $100(1-\alpha)$ percent prediction interval for any lead time $\tau$ is
+
+$(2+\frac{\lambda}{1-\lambda}\tau)\hat{y}_T^{(1)} - (1+\frac{\lambda}{1-\lambda}\tau)\hat{y}_T^{(2)} \pm Z_{\alpha/2}\frac{c_\tau}{c_1}\hat{\sigma}_e$ or $\hat{y}_{T+\tau}(T) \pm Z_{\alpha/2}\frac{c_\tau}{c_1}\hat{\sigma}_e$
+
+where $c_i^2=1+\frac{\lambda}{(2-\lambda)^3}[(10-14\lambda+5\lambda^2)+2i\lambda(4-3\lambda)+2i^2\lambda^2]$
+
+For $\tau=1$ the prediction interval becomes
+
+$(2+\frac{\lambda}{1-\lambda})\hat{y}_T^{(1)} - (1+\frac{\lambda}{1-\lambda})\hat{y}_T^{(2)} \pm Z_{\alpha/2}*\hat{\sigma}_e$ or $\hat{y}_{T+1}(T) \pm Z_{\alpha/2}*\hat{\sigma}_e$
+
+The calculated intervals are displayed in the table below:
+
+```{r}
+# Table of exponential smoothing forecasts and prediction intervals from 1996-2005
+dt <- cbind(Year=1996:2005, Forecast=forecast.smooth, 
+            '95% LPL'=forecast.smooth-cl, '95% UPL'=forecast.smooth+cl)
+kable(dt, row.names=F, 
+      caption='Exponential Smoothing Forecasts and 95% Prediction Intervals (1996-2005)')
+```
+
+**Table 5** shows the exponential smoothing forecasts and 95% prediction intervals for final_data1 from 1996-2005.
+
+## 1.3 Linear regression model
+
+## 1.3.1
+Use a linear regression model to fit the data, excluding the last 10 observations. 
+
+## Answer
+First, we convert the data (excluding the last 10 observations) to a time-series object using the **ts** function. Then, we fit a linear model with trend component to the time-series object using the **tslm** function from the **forecast** package. The summary of the model is below:
+
+```{r}
+# Convert data to ts object
+y <- ts(final_data1$coal_production[1:47], start=1949, end=1995)
+# Fitted linear model with trend component
+lm <- tslm(y ~ trend)
+# Model summary
+summary(lm)
+```
+
+Thus, the fitted linear regression model is
+$$\hat{y} = 349159.7 + 13624.3x$$
+where $\hat{y}$ = predicted value of coal production and $x$ = time ($x=1$ for 1949, $x=2$ for 1950, etc.).
+
+```{r}
+# Fitted values
+fit.lm <- lm$fitted.values
+
+# Linear regression fitted values plot
+plot(final_data1$coal_production ~ year, data=final_data1, type='p', pch=16, 
+    main='Linear Regression Fitted Values Plot for final_data1', 
+    ylab='Coal Production', xlab='Year')
+lines(1949:1995, fit.lm)
+legend('topleft', c('Actual', 'Fitted'), pch=c(16, NA), lty=c(NA, 1))
+```
+\begin{center}
+Figure 8: Fitted values for the linear regression model of final\_data1.
+\end{center}
+
+**Figure 8** shows the fitted values for the linear regression model of final_data1.
+
+## 1.3.2
+Forecast the last 10 observations. Calculate the mean squared error (MSE) and the mean absolute percent forecast error (MAPE). 
+
+## Answer
+At year 1995, we make the one-step-ahead forecast for 1996. Then when data for 1996 is available, we make the one-step-ahead forecast for 1997, and so on. At each year from 1996-2004, we also update the linear regression model as we update the actual values.
+
+```{r}
+# One-step ahead linear regression forecast and prediction limits for year 1996
+forecast.lm <- forecast(lm, h=1)$mean
+lpl <- forecast(lm, h=1)$lower[,2] ; upl <- forecast(lm, h=1)$upper[,2]
+
+# One-step ahead linear regression forecasts and prediction limits for years 1997-2005
+for (i in 1:9) {
+  # Updated actual value
+  y <- ts(final_data1$coal_production[1:(47+i)], start=1949, end=(1995+i))
+  # Updated linear model
+  lm <- tslm(y ~ trend)
+  # Vector of forecasted values
+  forecast.lm <- c(forecast.lm, forecast(lm, h=1)$mean)
+  # Vectors of prediction limits
+  lpl <- c(lpl, forecast(lm, h=1)$lower[,2])
+  upl <- c(upl, forecast(lm, h=1)$upper[,2])
+}
+
+# Linear regression forecast plot
+plot(final_data1$coal_production[1:47] ~ year[1:47], data=final_data1, type='p', pch=16,
+xlim=c(1949, 2005), ylim=c(420000, 1295000),
+main='Linear Regression Forecasts for final_data1\n(1996-2005)', ylab='Coal Production', xlab='Year')
+points(1996:2005, final_data1$coal_production[48:57])
+lines(1996:2005, forecast.lm) ; lines(1996:2005, lpl, lty=2) ; lines(1996:2005, upl, lty=2)
+legend('topleft', pch=c(16,1,NA,NA), lty=c(NA,NA,1,2), bty='n', 
+       legend=c('Actual (1949-1995)','Actual (1996-2005)', 
+                'Forecast', '95% Prediction Intervals'))
+```
+\begin{center}
+Figure 9: One-step ahead linear regression forecasts for final\_data1 from 1996-2005.
+\end{center}
+
+**Figure 9** shows the one-step ahead linear regression forecasts for final_data1 from 1996-2005.
+
+Next, we calculate the mean squared error (MSE) and mean absolute percentage error (MAPE) of the
+linear regression forecasts.
+
+```{r}
+# Linear regression forecast errors
+error.lm <- final_data1$coal_production[48:57] - forecast.lm
+# MSE and MAPE of linear regression forecasts
+MSE.lm <- sum(error.lm^2) / 10
+MAPE.lm <- 100*sum(abs(error.lm/final_data1$coal_production[48:57])) / 10
+
+dt <- rbind(MSE=MSE.lm, MAPE=MAPE.lm)
+kable(dt, caption='MSE and MAPE of Linear Regression Forecasts')
+```
+
+**Table 6** shows the MSE and MAPE of the linear regression forecasts.
+
+We can now compare the MSE's and MAPE's of all three methods.
+
+```{r}
+dt1 <- cbind('MSE', signif(MSE.arima011, 3), signif(MSE.smooth, 3), signif(MSE.lm, 3))
+dt2 <- cbind('MAPE', round(MAPE.arima011, 3), round(MAPE.smooth, 3), round(MAPE.lm, 3))
+dt <- rbind(dt1, dt2)
+
+# Table of MSE and MAPE comparison
+kable(dt, col.names=c('', 'ARIMA', 'Exponential Smoothing', 'Linear Regression'),
+      caption='MSE and MAPE Comparison')
+```
+
+**Table 7** shows the MSE's and MAPE's of the three methods: ARIMA, exponential smoothing, and linear regression. The ARIMA forecasts are the most accurate (smallest errors), while the linear regression forecasts are the least accurate (largest errors).
+
+\newpage
+
+## 1.3.3
+Show how to obtain the 95% prediction intervals for the forecasts in part 1.3.2). Your answer should include the formula of calculating PIs and the calculated intervals.
+
+## Answer
+The $100(1-\alpha$) percent prediction interval for $y_{n+1}$ when the predictor $x=x_{n+1}$ is
+
+$\hat{y}_{n+1} \pm t_{(\alpha/2,n-2)}*\sqrt{MSE}\sqrt{1+\frac{1}{n}+\frac{(x_{n+1}-\bar{x})^2}{\sum{(x_i-\bar{x})^2}}}$
+
+The calculated intervals are displayed in the table below:
+
+```{r}
+# Table of linear regression forecasts and prediction intervals from 1996-2005
+dt <- cbind(Year=1996:2005, Forecast=forecast.lm, '95% LPL'=lpl, '95% UPL'=upl)
+kable(dt, row.names=F,
+      caption='Linear Regression Forecasts and 95% Prediction Intervals (1996-2005)')
+```
+
+**Table 8** shows the linear regression forecasts and 95% prediction intervals for final_data1 from 1996-2005.
+
+\newpage
+
+# 2.
+The data final_data_560 contains 7 years of monthly data on the number of airline miles flown in the United Kingdom. This is a seasonal data. Develop an appropriate ARIMA model and a procedure for these data. And calculate the prediction intervals for the eighth year (next 12 months).
+
+## Answer
+First, we examine the time series plot, ACF, and PACF of the data.
+
+```{r,fig.height=6,fig.width=9,echo=F}
+# Load the final_data_560 data
+final_data_560 <- read.csv('C:\\Users\\George\\Desktop\\TimeSeriesAnalysis\\final_data_560.csv')
+
+nrb <- length(final_data_560$Month)
+
+layout(matrix(c(1,1,2,3), 2, 2, byrow=T))
+# Time series plot
+plot(final_data_560$Miles, type='o', pch=16, cex=0.8,
+     main='Time Series Plot of UK Airline Miles Flown', 
+     ylab='Miles (In Millions)', xlab='', xaxt='n')
+axis(1, seq(1, nrb, 3), labels=final_data_560$Month[seq(1, nrb, 3)], las=2)
+
+# ACF and PACF
+acf(final_data_560$Miles, lag.max=40, main='ACF of UK Airline Miles Flown')
+acf(final_data_560$Miles, lag.max=40, type='partial', main='PACF of UK Airline Miles Flown')
+```
+\begin{center}
+Figure 10: Time series plot, ACF, and PACF of UK airline miles flown.
+\end{center}
+
+**Figure 10** shows the time series plot, ACF, and PACF of UK airline miles flown. The data exhibits an upward trend as well as a seasonal pattern. ACF values at lags 12, 24, 36 are significant and slowly decreasing, which indicate a monthly seasonality (s=12). We proceed with taking the seasonal difference and first difference of the data.
+
+```{r,fig.height=6,fig.width=9,echo=F}
+# Seasonal difference 
+miles.wt <- diff(diff(final_data_560$Miles, lag=1), lag=12)
+
+layout(matrix(c(1,1,2,3), 2, 2, byrow=T))
+# Time series plot of w(t)
+plot(c(rep(NA, 13), miles.wt), type='o', pch=16, cex=0.8, 
+     main='Time Series Plot of w(t)',
+     ylab=expression(w[t]), xlab='', xaxt='n')
+axis(1, seq(1, nrb, 3), labels=final_data_560$Month[seq(1, nrb, 3)], las=2)
+
+# ACF and PACF of w(t)
+acf(miles.wt, lag.max=40, main='ACF of w(t)')
+acf(miles.wt, lag.max=40, type='partial', main='PACF of w(t)')
+```
+\begin{center}
+Figure 11: Time series plot, ACF, and PACF of $w_t=(1-B)(1-B^{12})y_t$.
+\end{center}
+
+**Figure 11** shows the time series plot, ACF, and PACF of $w_t=(1-B)(1-B^{12})y_t$. Applying seasonal differencing $D=12$ and first differencing appears to have removed the trend. The ACF seems to be significant at the first two lags, and the PACF decays at early lags. This suggests a nonseasonal MA(2) component in the model. The ACF having a significant value at lag 12 and the PACF decaying at lags 12, 24, and 36 also suggest a seasonal MA(1) component. Thus, we fit an ARIMA(0,1,2) x $(0,1,1)_{12}$ model to the data. 
+
+The parameter estimates are:
+
+```{r,echo=F}
+# Fitted SARIMA model
+sarima <- Arima(final_data_560$Miles, order=c(0,1,2), seasonal=list(order=c(0,1,1), period=12))
+
+# Output for SARIMA model
+sarima
+```
+
+Thus, the fitted model is
+$$(1-B)(1-B)^{12}y_t=(1-0.5845B-0.2429B^2)(1-0.5425B^{12})\epsilon_t$$
+
+Next, we plot the ACF and PACF of the residuals.
+
+```{r,fig.height=5,fig.width=13,echo=F}
+# Residuals
+res.sarima <- as.vector(residuals(sarima))
+
+par(mfrow=c(1,2))
+# ACF and PACF of the residuals
+acf(res.sarima, lag.max=25, main='ACF of Residuals')
+acf(res.sarima, lag.max=25, type='partial', main='PACF of Residuals')
+```
+\begin{center}
+Figure 12: ACF and PACF of residuals from the ARIMA(0,1,2) x $(0,1,1)_{12}$ model.
+\end{center}
+
+**Figure 12** shows the ACF and PACF of residuals from the ARIMA(0,1,2) x $(0,1,1)_{12}$ model. There are still some small significant values, but most of the autocorrelation has been modeled out.
+
+Next, we look at the the 4-in-1 residual plots (normal Q-Q, residual vs. fitted value, histogram, and residual vs. observation order).
+
+```{r,fig.height=6,fig.width=9,echo=F}
+# Fitted values
+fit.sarima <- as.vector(fitted(sarima))
+
+# 4-in-1 plot of residuals
+par(mfrow=c(2,2))
+qqnorm(res.sarima, datax=T, pch=16, xlab='Residual', main='Normal Q-Q Plot of the Residuals')
+qqline(res.sarima, datax=T)
+plot(fit.sarima, res.sarima, pch=16, xlab='Fitted Value', ylab='Residual', 
+     main='Residual vs. Fitted Value') ; abline(h=0)
+hist(res.sarima, col='gray', xlab='Residual', main='Histogram of the Residuals')
+plot(res.sarima, type='l', xlab='Observation Order', ylab='Residual', 
+     main='Residual vs. Observation Order')
+points(res.sarima, pch=16, cex=0.8) ; abline(h=0)
+```
+\begin{center}
+Figure 13: Residual plots from the ARIMA(0,1,2) x $(0,1,1)_{12}$ model.
+\end{center}
+
+\newpage
+
+**Figure 13** shows the residual plots from the ARIMA(0,1,2) x $(0,1,1)_{12}$ model. The normal q-q plot of the residuals shows that most of the residuals follow a normal distribution except at the tails. The histogram of the residuals looks mostly normal. The residual vs. fitted value plot does not show any obvious patterns in the residuals, so the equal variance assumption does not appear to be violated. The residual vs. observation order plot does not indicate any autocorrelation.
+
+Finally, we plot the fitted values and forecast the eighth year (next 12 months).
+
+```{r,echo=F}
+# SARIMA fitted values plot
+plot(final_data_560$Miles, type='p', pch=16, cex=0.8,
+     main='SARIMA Fitted Values Plot', 
+     ylab='Miles (In Millions)', xlab='', xaxt='n')
+axis(1, seq(1, nrb, 3), labels=final_data_560$Month[seq(1, nrb, 3)], las=2)
+lines(1:nrb, fit.sarima)
+legend('topleft', c('Actual', 'Fitted'), pch=c(16, NA), lty=c(NA, 1))
+```
+\begin{center}
+Figure 14: Fitted values for the ARIMA(0,1,2) x $(0,1,1)_{12}$ model.
+\end{center}
+
+**Figure 14** shows the fitted values for the ARIMA(0,1,2) x $(0,1,1)_{12}$ model. The model provides a reasonable fit to the data. 
+
+```{r}
+# One- to 12-step ahead SARIMA forecasts and prediction limits for the next 12 months
+forecast.sarima <- forecast(sarima, h=12)$mean
+lpl <- forecast(sarima, h=12)$lower[,2]
+upl <- forecast(sarima, h=12)$upper[,2]
+
+# SARIMA forecast plot
+plot(final_data_560$Miles, type='p', pch=16, cex=0.8, xlim=c(1, 96), ylim=c(6, 19),
+     main='SARIMA Forecasts for the Eighth Year (Next 12 Months)', 
+     ylab='Miles (In Millions)', xlab='', xaxt='n')
+axis(1, seq(1, 96, 3), labels=final_data_560$Month[seq(1, 96, 3)], las=2)
+lines(85:96, forecast.sarima)
+lines(85:96, lpl, lty=2)
+lines(85:96, upl, lty=2)
+legend('topleft', pch=c(16,NA,NA), lty=c(NA,1,2), bty='n', 
+       legend=c('Actual', 'Forecast', '95% Prediction Intervals'))
+```
+\begin{center}
+Figure 15: One- to 12-step ahead SARIMA forecasts for the next 12 months.
+\end{center}
+
+**Figure 15** shows the one- to 12-step ahead SARIMA forecasts for the next 12 months.
+
+```{r}
+dt <- cbind(Forecast=forecast.sarima, '95% LPL'=lpl, '95% UPL'=upl)
+kable(dt, caption='SARIMA Forecasts and 95% Prediction Intervals for the Eighth Year (Next 12 Months)')
+```
+
+**Table 9** shows the SARIMA forecasts and 95% prediction intervals for the next 12 months.
+
+
+
